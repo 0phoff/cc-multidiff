@@ -1,0 +1,6 @@
+{
+  "name": "multi-diff",
+  "version": "0.1.0",
+  "description": "Multi-repo diff pane: root repo status plus per-worktree changed files and file diffs",
+  "types": "./types/index.d.ts"
+}

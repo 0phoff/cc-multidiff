@@ -1,0 +1,5 @@
+{
+  "name": "local-mods",
+  "owner": { "name": "too7qfn" },
+  "plugins": [{ "name": "multi-diff", "source": "./" }]
+}
