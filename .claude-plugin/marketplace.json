@@ -1,5 +1,17 @@
 {
   "name": "local-mods",
-  "owner": { "name": "too7qfn" },
-  "plugins": [{ "name": "multi-diff", "source": "./" }]
+  "description": "Personal Claude Code mods",
+  "owner": {
+    "name": "0phoff"
+  },
+  "plugins": [
+    {
+      "name": "multi-diff",
+      "source": "./",
+      "description": "Multi-repo diff pane: root repo status, per-worktree changed files and expandable diffs",
+      "author": {
+        "name": "0phoff"
+      }
+    }
+  ]
 }
