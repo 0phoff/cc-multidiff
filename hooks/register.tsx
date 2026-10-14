@@ -11,7 +11,6 @@ const view = atom({ plugin: 'multi-diff', key: 'view' } as const, null)
 const error = atom({ plugin: 'multi-diff', key: 'error' } as const, null)
 // Bumped on every pin change, so the sites that read the pins draw again.
 const pinTick = atom({ plugin: 'multi-diff', key: 'pinTick' } as const, 0)
-const expand = atom({ plugin: 'multi-diff', key: 'expand' } as const, {})
 
 // Unicode stand-ins: the Button label ignores nested Text styles, so bold is
 // carried by the glyphs themselves.
@@ -75,7 +74,15 @@ const compare = async (run: Run, dir: string, branch: string, tracking: boolean)
   }
   const base = ref ? await countAgainst(run, dir, ref) : { ahead: 0, behind: 0 }
   const remote = branch && (await exists(`origin/${branch}`)) ? await countAgainst(run, dir, `origin/${branch}`) : null
-  return { ref, ...base, remote }
+  // A squash merge that deleted the remote branch leaves commits "ahead" of the base,
+  // yet merging the branch into the base would change nothing: its content has landed.
+  let merged = false
+  if (!tracking && !remote && ref && base.ahead > 0) {
+    const tree = await run(['git', 'merge-tree', '--write-tree', ref, 'HEAD'], dir)
+    const baseTree = await run(['git', 'rev-parse', `${ref}^{tree}`], dir)
+    merged = tree.exitCode === 0 && tree.stdout.trim().split('\n')[0] === baseTree.stdout.trim()
+  }
+  return { ref, ...base, remote, merged }
 }
 
 const readRepo = async (run: Run, dir: string, name: string, withStats: boolean, tracking = false): Promise<RepoInfo> => {
@@ -99,13 +106,13 @@ const readRepo = async (run: Run, dir: string, name: string, withStats: boolean,
       const [added, removed] = counts.get(path) ?? [0, 0]
       return { code, path, added, removed }
     })
-  const { ref, ahead, behind, remote } = await compare(run, dir, branch.stdout.trim(), tracking)
-  return { name, dir, branch: branch.stdout.trim() || '(detached)', changes, ref, ahead, behind, remote }
+  const { ref, ahead, behind, remote, merged } = await compare(run, dir, branch.stdout.trim(), tracking)
+  return { name, dir, branch: branch.stdout.trim() || '(detached)', changes, ref, ahead, behind, remote, merged }
 }
 
 const collect = async ($: any): Promise<Snapshot> => {
-  // The session may have moved into a worktree: the helena folder is above `worktrees/`.
-  const cwd: string = await $.session.cwd()
+  // The session root, not the shell cwd (a `cd` moves that); inside a worktree the helena folder is above `worktrees/`.
+  const cwd: string = await $.session.root()
   const root = cwd.includes('/worktrees/') ? cwd.slice(0, cwd.indexOf('/worktrees/')) : cwd
   const run: Run = (argv, cwd) => $.process.run(argv, { cwd })
 
@@ -140,98 +147,95 @@ const refresh = async ($: any) => {
 }
 
 
-// The diff is read with the whole file as context, parsed into rows, and drawn as
-// separate hunks: changed lines with a few lines around them, and a button for
-// every run of unchanged lines left out, which reveals more when pressed.
-type Row = { t: ' ' | '+' | '-'; text: string; o: number; n: number }
-type Piece = { kind: 'code'; source: string } | { kind: 'hidden'; gap: number; count: number }
+// The diff is read as git prints it (three lines of context) and drawn as the
+// built-in /diff draws it: one `Code` block a hunk, with line numbers and colours.
+type Hunk = { oldStart: number; newStart: number; lines: string[] }
 
-const CONTEXT = 3
-const STEP = 20
+// A `Code` source holds at most 10000 characters; leave room for the header.
+const MAX_SOURCE_CHARS = 9000
 
-const parseRows = (text: string): Row[] => {
-  const rows: Row[] = []
-  let o = 1
-  let n = 1
-  let inHunk = false
+// Controls, format and invisible characters are dropped (tabs stay), so nothing
+// can reorder or hide a line.
+const UNSAFE = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g
+const clean = (line: string) => line[0] + line.slice(1).replace(UNSAFE, '')
+
+const parseHunks = (text: string): Hunk[] => {
+  const hunks: Hunk[] = []
   for (const line of text.split('\n')) {
-    if (line.startsWith('@@')) {
-      const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line)
-      if (m) {
-        o = Number(m[1])
-        n = Number(m[2])
-      }
-      inHunk = true
-    } else if (inHunk && (line[0] === ' ' || line[0] === '+' || line[0] === '-')) {
-      const t = line[0] as Row['t']
-      rows.push({ t, text: line.slice(1), o, n })
-      if (t !== '+') o++
-      if (t !== '-') n++
-    }
+    const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line)
+    if (m) hunks.push({ oldStart: Number(m[1]), newStart: Number(m[2]), lines: [] })
+    else if (hunks.length && (line[0] === ' ' || line[0] === '+' || line[0] === '-')) hunks.at(-1)!.lines.push(clean(line))
   }
-  return rows
+  return hunks
 }
 
-const toSource = (rows: Row[]): string => {
-  const oc = rows.filter(r => r.t !== '+').length
-  const nc = rows.filter(r => r.t !== '-').length
-  return [`@@ -${rows[0].o},${oc} +${rows[0].n},${nc} @@`, ...rows.map(r => r.t + r.text)].join('\n')
+// A hunk as unified-diff text, its header counted off its lines so a split hunk still parses.
+// A side with no lines names the line before its start, as git writes it.
+const hunkSource = ({ oldStart, newStart, lines }: Hunk): string => {
+  const oc = lines.filter(l => l[0] !== '+').length
+  const nc = lines.filter(l => l[0] !== '-').length
+  const o = oc === 0 ? Math.max(0, oldStart - 1) : oldStart
+  const n = nc === 0 ? Math.max(0, newStart - 1) : newStart
+  return [`@@ -${o},${oc} +${n},${nc} @@`, ...lines].join('\n')
 }
 
-const layout = (rows: Row[], reveal: (gap: number) => number): Piece[] => {
-  const near = rows.map(() => false)
-  rows.forEach((r, i) => {
-    if (r.t === ' ') return
-    for (let j = Math.max(0, i - CONTEXT); j <= Math.min(rows.length - 1, i + CONTEXT); j++) near[j] = true
+// The sources to draw: a hunk too long for one `Code` block is split in several.
+const sourcesOf = (text: string): string[] =>
+  parseHunks(text).flatMap(hunk => {
+    const parts: string[] = []
+    let { oldStart, newStart } = hunk
+    let lines: string[] = []
+    let chars = 0
+    const flush = () => {
+      if (!lines.length) return
+      parts.push(hunkSource({ oldStart, newStart, lines }))
+      oldStart += lines.filter(l => l[0] !== '+').length
+      newStart += lines.filter(l => l[0] !== '-').length
+      lines = []
+      chars = 0
+    }
+    for (const line of hunk.lines) {
+      if (chars + line.length + 1 > MAX_SOURCE_CHARS) flush()
+      lines.push(line.slice(0, MAX_SOURCE_CHARS))
+      chars += line.length + 1
+    }
+    flush()
+    return parts
   })
-  const visible = [...near]
-  // The unchanged runs between the lines shown by default, each keyed by where it starts.
-  for (let i = 0; i < rows.length; ) {
-    if (near[i]) {
-      i++
-      continue
-    }
-    let end = i
-    while (end < rows.length && !near[end]) end++
-    const k = reveal(i)
-    // Next to the hunk above reveals downwards, next to the hunk below upwards.
-    if (i > 0) for (let j = i; j < Math.min(end, i + k); j++) visible[j] = true
-    if (end < rows.length) for (let j = Math.max(i, end - k); j < end; j++) visible[j] = true
-    i = end
-  }
-  const pieces: Piece[] = []
-  let gap = -1
-  for (let i = 0; i < rows.length; ) {
-    let end = i
-    if (visible[i]) {
-      while (end < rows.length && visible[end]) end++
-      pieces.push({ kind: 'code', source: toSource(rows.slice(i, end)) })
-    } else {
-      while (end < rows.length && !visible[end]) end++
-      // The key is the start of the default gap this run belongs to.
-      let start = i
-      while (start > 0 && !near[start - 1]) start--
-      gap = start
-      pieces.push({ kind: 'hidden', gap, count: end - i })
-    }
-    i = end
-  }
-  return pieces
+
+// Surfaces that do not draw a `Code` diff themselves get the rows drawn here: a gutter
+// numbered from the hunk's header, the marker, add and remove colours.
+// Plain spaces are collapsed by the surface, so the line's own are non-breaking.
+// Line numbers are right-aligned in a column this many characters wide (the surface's
+// text is not monospace, so the width comes from a Box, not from padding), so every hunk lines up.
+const GUTTER = 4
+type DiffRow = { marker: ' ' | '+' | '-'; number: number; text: string }
+
+const rowsOf = (hunk: Hunk): DiffRow[] => {
+  let o = hunk.oldStart
+  let n = hunk.newStart
+  return hunk.lines.map(line => {
+    const marker = line[0] as DiffRow['marker']
+    const text = line.slice(1).replace(/\t/g, '    ').replace(/ /g, NBSP)
+    const number = marker === '-' ? o : n
+    if (marker !== '+') o++
+    if (marker !== '-') n++
+    return { marker, number, text }
+  })
 }
 
 const diffOf = async ($: any, dir: string, path: string, code: string): Promise<string> => {
   const run: Run = (argv, cwd) => $.process.run(argv, { cwd })
   const out =
     code === '??'
-      ? await run(['git', 'diff', '--no-index', '--no-color', '--unified=100000', '--', '/dev/null', path], dir)
-      : await run(['git', 'diff', 'HEAD', '--no-color', '--unified=100000', '--', path], dir)
+      ? await run(['git', 'diff', '--no-index', '--no-color', '--', '/dev/null', path], dir)
+      : await run(['git', 'diff', 'HEAD', '--no-color', '--', path], dir)
   return out.stdout || out.stderr
 }
 
 const openFile = async ($: any, repo: RepoInfo, change: Change, origin: string) => {
   const text = await diffOf($, repo.dir, change.path, change.code)
   const next: FileView = { origin, repo: repo.name, dir: repo.dir, path: change.path, code: change.code, text }
-  await update($, expand, () => ({}))
   await update($, view, () => next)
 }
 
@@ -277,7 +281,7 @@ const getPins = async ($: any): Promise<string[]> => {
   return Array.isArray(list) ? list : []
 }
 const togglePin = async ($: any) => {
-  const cwd: string = await $.session.cwd()
+  const cwd: string = await $.session.root()
   const pins = await getPins($)
   const next = pins.includes(cwd) ? pins.filter(p => p !== cwd) : [...pins, cwd]
   await $.store.set(PINS, next)
@@ -302,10 +306,6 @@ export const register: Register = on => {
       name: 'multidiff',
       description: 'Toggle the Multidiff pane (root repos + worktrees)',
     })
-    await $.command.register({
-      name: 'multi-diff',
-      description: 'Same as /multidiff',
-    })
     return next(e)
   })
 
@@ -314,15 +314,10 @@ export const register: Register = on => {
     return { text: isOpen ? 'Multidiff pane opened.' : 'Multidiff pane closed.' }
   })
 
-  on('command.run', { command: 'multi-diff' }, async $ => {
-    const isOpen = await togglePane($)
-    return { text: isOpen ? 'Multidiff pane opened.' : 'Multidiff pane closed.' }
-  })
-
   // The button above the prompt, shown in the folders the pane was pinned for.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     await read($, pinTick)
-    if (e.props.hasSurvey || !(await getPins($)).includes(await $.session.cwd())) return next(e)
+    if (e.props.hasSurvey || !(await getPins($)).includes(await $.session.root())) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
       <Box>
@@ -344,7 +339,7 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Code } = $.ui.resolve(e)
     await read($, pinTick)
-    const isPinned = (await getPins($)).includes(await $.session.cwd())
+    const isPinned = (await getPins($)).includes(await $.session.root())
     const pinButton = (
       <Button key="pin" plain onPress={() => togglePin($)}>
         <Text bold color="cyan">{isPinned ? '⚑ ' : '⚐ '}</Text>
@@ -356,12 +351,10 @@ export const register: Register = on => {
     const err = await read($, error)
 
     if (file) {
-      const rows = parseRows(file.text)
+      const sources = sourcesOf(file.text)
+      const hunks = parseHunks(file.text)
       // A deleted file has nothing to open: open its repo folder instead.
       const filePath = file.code.includes('D') ? file.dir : `${file.dir}/${file.path}`
-      const opened = await read($, expand)
-      const slot = (gap: number) => `${file.dir}::${file.path}::${gap}`
-      const pieces = rows.length ? layout(rows, gap => opened[slot(gap)] ?? 0) : []
       return (
         <Box flexDirection="column" width="100%">
           <Box width="100%">
@@ -380,30 +373,44 @@ export const register: Register = on => {
             <Box flexGrow={1} />
             {pinButton}
           </Box>
-          <Box marginTop={1}>
+          <Box marginTop={1} marginBottom={1}>
             <Text bold>{file.origin}</Text>
             <Text dimColor> › {file.repo}: {file.path}</Text>
           </Box>
-          {pieces.length === 0 && (
+          {sources.length === 0 && (
             <Text dimColor>{file.text.trim() || 'No textual changes (binary or mode change).'}</Text>
           )}
-          {pieces.map((piece, i) =>
-            piece.kind === 'code' ? (
-              <Box key={`code-${i}`} width="100%">
-                <Code source={piece.source} format="diff" path={file.path} wrap="truncate-end" />
-              </Box>
-            ) : (
-              <Box key={`hidden-${i}`}>
-                <Button
-                  key={`more-${piece.gap}-${i}`}
-                  plain
-                  onPress={() => update($, expand, cur => ({ ...cur, [slot(piece.gap)]: (cur[slot(piece.gap)] ?? 0) + STEP }))}
-                >
-                  <Text color="cyan">⋯ {piece.count} unchanged lines · click to show more</Text>
-                </Button>
-              </Box>
-            ),
-          )}
+          {e.surface === 'terminal'
+            ? sources.map((source, i) => (
+                <Box key={`code-${i}`} width="100%">
+                  <Code source={source} format="diff" path={file.path} />
+                </Box>
+              ))
+            : hunks.map((hunk, i) => {
+                const rows = rowsOf(hunk)
+                return (
+                  <Box key={`hunk-${i}`} flexDirection="column" width="100%" marginTop={i === 0 ? 0 : 1}>
+                    {rows.map((r, j) => {
+                      const background = r.marker === '+' ? 'diffAddedDimmed' : r.marker === '-' ? 'diffRemovedDimmed' : undefined
+                      return (
+                        <Box key={`row-${j}`} width="100%" backgroundColor={background}>
+                          <Box width={GUTTER + 1} flexShrink={0} justifyContent="flex-end">
+                            <Text dimColor>{r.number}</Text>
+                          </Box>
+                          <Box width={3} flexShrink={0} paddingLeft={1}>
+                            <Text bold color={r.marker === '+' ? 'success' : r.marker === '-' ? 'error' : undefined}>
+                              {r.marker === ' ' ? NBSP : r.marker}
+                            </Text>
+                          </Box>
+                          <Box flexGrow={1}>
+                            <Text wrap="wrap">{r.text || NBSP}</Text>
+                          </Box>
+                        </Box>
+                      )
+                    })}
+                  </Box>
+                )
+              })}
         </Box>
       )
     }
@@ -442,6 +449,7 @@ export const register: Register = on => {
     // Whether the branch has a copy on the remote and how it stands against it.
     const remoteMarker = (repo: RepoInfo) => {
       const r = repo.remote
+      if (repo.merged) return <Text color="success">merged ✓ into {repo.ref}</Text>
       if (!r) return <Text dimColor>not pushed</Text>
       if (r.ahead === 0 && r.behind === 0) return <Text color="success">pushed ✓ in sync</Text>
       const parts = [r.ahead > 0 ? `↑${r.ahead} unpushed` : '', r.behind > 0 ? `↓${r.behind} behind` : '']
