@@ -11,6 +11,7 @@ declare module 'claude-code' {
       snapshot: Snapshot | null
       focus: string | null
       view: FileView | null
+      collapsed: string[]
       error: string | null
       pinTick: number
       settingsTick: number

@@ -9,6 +9,8 @@ const snapshot = atom({ plugin: 'multi-diff', key: 'snapshot' } as const, null)
 const focus = atom({ plugin: 'multi-diff', key: 'focus' } as const, null)
 const view = atom({ plugin: 'multi-diff', key: 'view' } as const, null)
 const error = atom({ plugin: 'multi-diff', key: 'error' } as const, null)
+// The tree nodes (repo and folder keys) the person has folded.
+const collapsed = atom({ plugin: 'multi-diff', key: 'collapsed' } as const, [] as string[])
 // Bumped on every pin change, so the sites that read the pins draw again.
 const pinTick = atom({ plugin: 'multi-diff', key: 'pinTick' } as const, 0)
 // Same for the diff setting.
@@ -107,6 +109,23 @@ const readRepo = async (run: Run, dir: string, name: string, settings: Settings)
   return { name, dir, branch, changes: [...tracked, ...fresh], ref, missing, base, ...counts }
 }
 
+// Runs `fn` over `items` a few at a time: every repo costs about eight git processes, and
+// reading them all at once buries the machine (security scanners look at each spawn).
+const POOL = 4
+const mapLimited = async <T, R>(items: T[], fn: (item: T) => Promise<R>): Promise<R[]> => {
+  const out: R[] = new Array(items.length)
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(POOL, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++
+        out[i] = await fn(items[i])
+      }
+    }),
+  )
+  return out
+}
+
 const collect = async ($: any): Promise<Snapshot> => {
   const settings = await getSettings($)
   // The session root, not the shell cwd (a `cd` moves that); inside a worktree the helena folder is above `worktrees/`.
@@ -116,20 +135,19 @@ const collect = async ($: any): Promise<Snapshot> => {
 
   const rootDirs = (await findRepos(run, root, '.', 4)).filter(p => !p.startsWith('./worktrees/'))
   // A project root that is itself a repo shows up as `.`.
-  const roots = await Promise.all(
-    rootDirs.map(p => readRepo(run, p === '.' ? root : `${root}/${p.slice(2)}`, p === '.' ? root.split('/').pop() || root : p.slice(2), settings)),
+  const roots = await mapLimited(
+    rootDirs,
+    p => readRepo(run, p === '.' ? root : `${root}/${p.slice(2)}`, p === '.' ? root.split('/').pop() || root : p.slice(2), settings),
   )
 
   const wtDirs = await findRepos(run, root, './worktrees', 5)
   const byWt = new Map<string, RepoInfo[]>()
-  await Promise.all(
-    wtDirs.map(async p => {
-      const [, , wt, ...rest] = p.split('/')
-      if (!rest.length) return
-      const info = await readRepo(run, `${root}/${p.slice(2)}`, rest.join('/'), settings)
-      byWt.set(wt, [...(byWt.get(wt) ?? []), info])
-    }),
-  )
+  await mapLimited(wtDirs, async p => {
+    const [, , wt, ...rest] = p.split('/')
+    if (!rest.length) return
+    const info = await readRepo(run, `${root}/${p.slice(2)}`, rest.join('/'), settings)
+    byWt.set(wt, [...(byWt.get(wt) ?? []), info])
+  })
   const worktrees: WorktreeInfo[] = [...byWt.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, repos]) => ({ name, repos: repos.sort((a, b) => a.name.localeCompare(b.name)) }))
@@ -137,16 +155,41 @@ const collect = async ($: any): Promise<Snapshot> => {
   return { root, roots, worktrees, at: Date.now() }
 }
 
-const refresh = async ($: any) => {
+// A refresh reads every repo, which takes seconds: while one runs, further asks (every tool call
+// of the agent asks) merge into a single run that starts right after it.
+let refreshing: Promise<void> | null = null
+let again = false
+const refresh = async ($: any): Promise<void> => {
+  if (refreshing) {
+    again = true
+    return refreshing
+  }
+  refreshing = (async () => {
+    do {
+      again = false
+      await refreshOnce($)
+    } while (again)
+  })().finally(() => {
+    refreshing = null
+  })
+  return refreshing
+}
+
+const refreshOnce = async ($: any) => {
   try {
     const snap = await collect($)
     await update($, snapshot, () => snap)
     await update($, error, () => null)
+    // The diff that is open follows the files.
+    const open = await read($, view)
+    if (open) {
+      const text = await diffOf($, open.dir, open.path, open.code, open.base)
+      await update($, view, cur => (cur && cur.dir === open.dir && cur.path === open.path ? { ...cur, text } : cur))
+    }
   } catch (err) {
     await update($, error, () => String(err))
   }
 }
-
 
 // The diff is read as git prints it (three lines of context) and drawn as the
 // built-in /diff draws it: one `Code` block a hunk, with line numbers and colours.
@@ -346,11 +389,34 @@ const openIn = async ($: any, editor: Editor, path: string) => {
   }
 }
 
-// Refresh the lists and re-read the diff that is open.
-const refreshFile = async ($: any, file: FileView) => {
-  await refresh($)
-  const text = await diffOf($, file.dir, file.path, file.code, file.base)
-  await update($, view, cur => (cur && cur.dir === file.dir && cur.path === file.path ? { ...cur, text } : cur))
+// A repo's changed files as folders: a folder holding only one folder is shown joined to it (a/b/c).
+type TreeNode = { name: string; key: string; dirs: TreeNode[]; files: Change[] }
+const buildTree = (changes: Change[], prefix: string): TreeNode => {
+  const top: TreeNode = { name: '', key: prefix, dirs: [], files: [] }
+  for (const change of changes) {
+    const parts = change.path.split('/')
+    let node = top
+    for (const part of parts.slice(0, -1)) {
+      let next = node.dirs.find(d => d.name === part)
+      if (!next) {
+        next = { name: part, key: `${node.key}/${part}`, dirs: [], files: [] }
+        node.dirs.push(next)
+      }
+      node = next
+    }
+    node.files.push(change)
+  }
+  const tidy = (node: TreeNode): TreeNode => {
+    node.dirs = node.dirs.map(d => {
+      let cur = d
+      while (cur.files.length === 0 && cur.dirs.length === 1) cur = { ...cur.dirs[0], name: `${cur.name}/${cur.dirs[0].name}` }
+      return tidy(cur)
+    })
+    node.dirs.sort((a, b) => a.name.localeCompare(b.name))
+    node.files.sort((a, b) => a.path.localeCompare(b.path))
+    return node
+  }
+  return tidy(top)
 }
 
 // Theme keys, so the markers follow the color scheme.
@@ -475,7 +541,11 @@ export const register: Register = on => {
     const file = await read($, view)
     const err = await read($, error)
 
-    if (file) {
+    const closed = await read($, collapsed)
+    const toggle = (key: string) => update($, collapsed, list => (list.includes(key) ? list.filter(k => k !== key) : [...list, key]))
+
+    // The open file's diff, drawn beside the tree.
+    const diffPanel = (file: FileView) => {
       const sources = sourcesOf(file.text)
       const hunks = parseHunks(file.text)
       // A deleted file has nothing to open: open its repo folder instead.
@@ -483,69 +553,64 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" width="100%">
           <Box width="100%">
-            {pinButton}
-            <Button key="back" plain onPress={() => update($, view, () => null)}>
-              <Text bold color="suggestion">← </Text>
-            </Button>
-            <Button key="refresh-file" plain onPress={() => refreshFile($, file)}>
-              <Text bold color="suggestion">↻ </Text>
-            </Button>
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text>
+                <Text dimColor>{file.repo}: </Text>
+                <Text bold>{file.path}</Text>
+              </Text>
+            </Box>
             <Button key="code-file" plain onPress={() => openIn($, VSCODE, filePath)}>
-              <Text bold color="suggestion">ⓥ </Text>
+              <Text bold color="suggestion"> ⓥ </Text>
             </Button>
             <Button key="zed-file" plain onPress={() => openIn($, ZED, filePath)}>
               <Text bold color="suggestion">ⓩ </Text>
             </Button>
           </Box>
-          <Box marginTop={1} marginBottom={1}>
-            <Text bold>{file.origin}</Text>
-            <Text dimColor> › {file.repo}: {file.path}</Text>
-          </Box>
-          {sources.length === 0 && (
-            <Text dimColor>{file.text.trim() || 'No textual changes (binary or mode change).'}</Text>
-          )}
-          {e.surface === 'terminal'
-            ? sources.map((source, i) => (
-                <Box key={`code-${i}`} width="100%">
-                  <Code source={source} format="diff" path={file.path} />
-                </Box>
-              ))
-            : hunks.map((hunk, i) => {
-                const rows = rowsOf(hunk)
-                return (
-                  <Box key={`hunk-${i}`} flexDirection="column" width="100%" marginTop={i === 0 ? 0 : 1}>
-                    {rows.map((r, j) => {
-                      const background = r.marker === '+' ? 'diffAddedDimmed' : r.marker === '-' ? 'diffRemovedDimmed' : undefined
-                      return (
-                        <Box key={`row-${j}`} width="100%" alignItems="flex-start" backgroundColor={background}>
-                          <Box width={GUTTER + 1} flexShrink={0} justifyContent="flex-end">
-                            <Text dimColor>{r.number}</Text>
-                          </Box>
-                          <Box width={3} flexShrink={0} paddingLeft={1}>
-                            <Text bold color={r.marker === '+' ? 'success' : r.marker === '-' ? 'error' : undefined}>
-                              {r.marker === ' ' ? NBSP : r.marker}
-                            </Text>
-                          </Box>
-                          <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                            <Text wrap="wrap">
-                              {r.parts.length === 1 && !r.parts[0].text
-                                ? NBSP
-                                : r.parts.map((part, k) => (
-                                    <Text
-                                      key={`part-${k}`}
-                                      backgroundColor={part.changed ? (r.marker === '+' ? 'diffAddedWord' : 'diffRemovedWord') : undefined}
-                                    >
-                                      {part.text}
-                                    </Text>
-                                  ))}
-                            </Text>
-                          </Box>
-                        </Box>
-                      )
-                    })}
+          <Box marginTop={1} flexDirection="column" width="100%">
+            {sources.length === 0 && <Text dimColor>{file.text.trim() || 'No textual changes (binary or mode change).'}</Text>}
+            {e.surface === 'terminal'
+              ? sources.map((source, i) => (
+                  <Box key={`code-${i}`} width="100%">
+                    <Code source={source} format="diff" path={file.path} />
                   </Box>
-                )
-              })}
+                ))
+              : hunks.map((hunk, i) => {
+                  const rows = rowsOf(hunk)
+                  return (
+                    <Box key={`hunk-${i}`} flexDirection="column" width="100%" marginTop={i === 0 ? 0 : 1}>
+                      {rows.map((r, j) => {
+                        const background = r.marker === '+' ? 'diffAddedDimmed' : r.marker === '-' ? 'diffRemovedDimmed' : undefined
+                        return (
+                          <Box key={`row-${j}`} width="100%" alignItems="flex-start" backgroundColor={background}>
+                            <Box width={GUTTER + 1} flexShrink={0} justifyContent="flex-end">
+                              <Text dimColor>{r.number}</Text>
+                            </Box>
+                            <Box width={3} flexShrink={0} paddingLeft={1}>
+                              <Text bold color={r.marker === '+' ? 'success' : r.marker === '-' ? 'error' : undefined}>
+                                {r.marker === ' ' ? NBSP : r.marker}
+                              </Text>
+                            </Box>
+                            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                              <Text wrap="wrap">
+                                {r.parts.length === 1 && !r.parts[0].text
+                                  ? NBSP
+                                  : r.parts.map((part, k) => (
+                                      <Text
+                                        key={`part-${k}`}
+                                        backgroundColor={part.changed ? (r.marker === '+' ? 'diffAddedWord' : 'diffRemovedWord') : undefined}
+                                      >
+                                        {part.text}
+                                      </Text>
+                                    ))}
+                              </Text>
+                            </Box>
+                          </Box>
+                        )
+                      })}
+                    </Box>
+                  )
+                })}
+          </Box>
         </Box>
       )
     }
@@ -561,7 +626,10 @@ export const register: Register = on => {
       const title = toBold(p.title.toUpperCase())
       // The Box draws the banner; the Button inside is the click
       // target, with an em dash between the title and the count.
-      const press = () => update($, focus, cur => (cur === p.id ? null : p.id))
+      const press = async () => {
+        await update($, view, () => null)
+        await update($, focus, cur => (cur === p.id ? null : p.id))
+      }
       return (
         <Box
           key={`sec-${p.id}`}
@@ -586,7 +654,7 @@ export const register: Register = on => {
     // the rows of a section line up and short branches do not pay for a long one elsewhere.
     const statsOf = (r: RepoInfo) => `${r.missing ? 'branch does not exist' : r.ref ? `↑${r.ahead} ↓${r.behind}` : 'no upstream'} · ${r.changes.length} changed`
 
-    const repoRow = (id: string, repo: RepoInfo, withFiles: boolean, first: boolean, group: RepoInfo[]) => {
+    const repoRow = (id: string, repo: RepoInfo, first: boolean, group: RepoInfo[]) => {
       const n = repo.changes.length
       const branchWidth = Math.min(24, Math.max(0, ...group.map(r => r.branch.length))) + 2
       const statsWidth = Math.max(0, ...group.map(r => statsOf(r).length)) + 1
@@ -616,26 +684,74 @@ export const register: Register = on => {
               </Text>
             </Box>
           </Box>
-          {withFiles && n === 0 && (
-            <Box marginLeft={3}>
-              <Text dimColor>no changes</Text>
-            </Box>
-          )}
-          {withFiles &&
-            repo.changes.map(c => (
-              <Box key={`${id}/${repo.name}/${c.path}`} marginLeft={3}>
-                {/* Outside the Button: a Button label ignores the Text colors inside it. */}
-                <Text bold color={codeColor(c.code)}>{(c.code.trim() || 'M').padEnd(3)}</Text>
-                <Button key={`open/${id}/${repo.name}/${c.path}`} plain onPress={() => openFile($, repo, c, id === ROOT ? 'Repos' : id)}>
-                  {c.path}
-                </Button>
-                {c.added > 0 && <Text color="success"> +{c.added}</Text>}
-                {c.removed > 0 && <Text color="error"> -{c.removed}</Text>}
-              </Box>
-            ))}
         </Box>
       )
     }
+
+    // The tree of one folder level: folders first (click to fold), then its files (click to see the diff).
+    const treeRows = (node: TreeNode, depth: number, repo: RepoInfo, origin: string): any[] => [
+      ...node.dirs.flatMap(d => {
+        const isClosed = closed.includes(d.key)
+        return [
+          <Box key={`dir/${d.key}`} marginLeft={depth * 2}>
+            <Button key={`fold/${d.key}`} plain onPress={() => toggle(d.key)}>
+              {`${isClosed ? '▸' : '▾'} ${d.name}/`}
+            </Button>
+          </Box>,
+          ...(isClosed ? [] : treeRows(d, depth + 1, repo, origin)),
+        ]
+      }),
+      ...node.files.map(c => {
+        const selected = !!file && file.dir === repo.dir && file.path === c.path
+        return (
+          <Box key={`file/${repo.dir}/${c.path}`} alignSelf="flex-start" marginLeft={depth * 2} backgroundColor={selected ? 'promptBorder' : undefined}>
+            {/* Outside the Button: a Button label ignores the Text colors inside it. */}
+            <Text bold color={codeColor(c.code)}>{(c.code.trim() || 'M').padEnd(2)}</Text>
+            <Button key={`open/${repo.dir}/${c.path}`} plain onPress={() => openFile($, repo, c, origin)}>
+              {c.path.split('/').pop() ?? c.path}
+            </Button>
+            {c.added > 0 && <Text color="success"> +{c.added}</Text>}
+            {c.removed > 0 && <Text color="error"> -{c.removed}</Text>}
+          </Box>
+        )
+      }),
+    ]
+
+    // A focused section: the changed files of its repos as a tree, the open file's diff beside it.
+    const focusBody = (id: string, repos: RepoInfo[]) => {
+      const changed = repos.filter(r => r.changes.length > 0)
+      const clean = repos.length - changed.length
+      const origin = id === ROOT ? 'Repos' : id
+      return (
+        <Box key={`body-${id}`} width="100%" marginTop={1}>
+          <Box width={36} flexShrink={0} flexDirection="column" paddingRight={1}>
+            {changed.length === 0 && <Text dimColor>no changes</Text>}
+            {changed.flatMap(repo => {
+              const key = `${id}/${repo.name}`
+              const isClosed = closed.includes(key)
+              return [
+                <Box key={`repo/${key}`}>
+                  <Button key={`fold/${key}`} plain onPress={() => toggle(key)}>
+                    {`${isClosed ? '▸' : '▾'} ${repo.name}`}
+                  </Button>
+                  <Text dimColor> {repo.changes.length}</Text>
+                </Box>,
+                ...(isClosed ? [] : treeRows(buildTree(repo.changes, key), 1, repo, origin)),
+              ]
+            })}
+            {clean > 0 && changed.length > 0 && (
+              <Box marginTop={1}>
+                <Text dimColor>{clean} without changes</Text>
+              </Box>
+            )}
+          </Box>
+          <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="column" paddingLeft={1}>
+            {file ? diffPanel(file) : <Text dimColor>Select a file to see its diff.</Text>}
+          </Box>
+        </Box>
+      )
+    }
+
 
     // The folder the editor buttons open: the focused worktree, else the helena folder.
     const contextPath = activeWt ? `${snap.root}/worktrees/${activeWt.name}` : snap.root
@@ -646,7 +762,7 @@ export const register: Register = on => {
         <Box width="100%">
           {pinButton}
           {isFocusing && (
-            <Button key="back" plain onPress={() => update($, focus, () => null)}>
+            <Button key="back" plain onPress={async () => { await update($, view, () => null); await update($, focus, () => null) }}>
               <Text bold color="suggestion">← </Text>
             </Button>
           )}
@@ -681,7 +797,7 @@ export const register: Register = on => {
             summary: `${rootTotal} changed`,
             tone: rootTotal === 0 ? 'success' : 'error',
           })}
-        {(isRoot || !isFocusing) && snap.roots.map((r, i) => repoRow(ROOT, r, isRoot, i === 0, snap.roots))}
+        {(isRoot || !isFocusing) && (isRoot ? [focusBody(ROOT, snap.roots)] : snap.roots.map((r, i) => repoRow(ROOT, r, i === 0, snap.roots)))}
 
         {snap.roots.length === 0 && snap.worktrees.length === 0 && (
           <Box marginTop={1}>
@@ -693,7 +809,7 @@ export const register: Register = on => {
           return (
             <Box key={`wt-${wt.name}`} flexDirection="column">
               {section({ id: wt.name, title: wt.name, summary: `${total} changed`, tone: 'inactive', top: isFocusing ? 1 : 2 })}
-              {wt.repos.map((repo, i) => repoRow(wt.name, repo, isFocusing, i === 0, wt.repos))}
+              {isFocusing ? focusBody(wt.name, wt.repos) : wt.repos.map((repo, i) => repoRow(wt.name, repo, i === 0, wt.repos))}
             </Box>
           )
         })}
