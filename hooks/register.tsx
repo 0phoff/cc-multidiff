@@ -760,7 +760,6 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Box width="100%">
-          {pinButton}
           {isFocusing && (
             <Button key="back" plain onPress={async () => { await update($, view, () => null); await update($, focus, () => null) }}>
               <Text bold color="suggestion">← </Text>
@@ -769,6 +768,7 @@ export const register: Register = on => {
           <Button key="refresh" plain onPress={() => refresh($)}>
             <Text bold color="suggestion">↻ </Text>
           </Button>
+          {pinButton}
           <Button key="code" plain onPress={() => openIn($, VSCODE, contextPath)}>
             <Text bold color="suggestion">ⓥ </Text>
           </Button>
