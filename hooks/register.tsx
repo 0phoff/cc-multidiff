@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import type { Change, FileView, RepoInfo, Snapshot, WorktreeInfo } from '../types'
+import type { Change, FileView, RepoInfo, Settings, Snapshot, WorktreeInfo } from '../types'
 
 const PANE = 'multi-diff'
 const ROOT = '__root__'
@@ -11,6 +11,8 @@ const view = atom({ plugin: 'multi-diff', key: 'view' } as const, null)
 const error = atom({ plugin: 'multi-diff', key: 'error' } as const, null)
 // Bumped on every pin change, so the sites that read the pins draw again.
 const pinTick = atom({ plugin: 'multi-diff', key: 'pinTick' } as const, 0)
+// Same for the diff setting.
+const settingsTick = atom({ plugin: 'multi-diff', key: 'settingsTick' } as const, 0)
 
 // Unicode stand-ins: the Button label ignores nested Text styles, so bold is
 // carried by the glyphs themselves.
@@ -48,76 +50,75 @@ const countAgainst = async (run: Run, dir: string, ref: string) => {
   return { ahead: ahead || 0, behind: behind || 0 }
 }
 
-// Commits ahead/behind the branch's base (never its pushed copy): `uat` for a
-// hotfix, otherwise `dev`, `main` or `master`, whichever the repo has. A checkout
-// of one of those branches is compared with its own remote branch. `remote` says
-// separately whether the branch is pushed and in sync.
-const compare = async (run: Run, dir: string, branch: string, tracking: boolean) => {
-  const exists = async (ref: string) => (await run(['git', 'rev-parse', '--verify', '--quiet', ref], dir)).exitCode === 0
-  const bases = ['origin/dev', 'origin/main', 'origin/master']
-  const candidates = ['dev', 'uat', 'prod', 'main', 'master'].includes(branch)
-    ? [`origin/${branch}`]
-    : branch.startsWith('hotfix/')
-      ? ['origin/uat', ...bases]
-      : bases
-  let ref: string | null = null
-  if (tracking) {
-    // Root repos: whatever the checked-out branch tracks.
+// The ref a repo is compared against, from the global diff setting: its upstream
+// (`local`), its default branch (`default`) or a branch the person names (`branch`).
+// `missing` is only ever true for a `branch` the repo does not have.
+const resolveRef = async (run: Run, dir: string, settings: Settings): Promise<{ ref: string | null; missing: boolean }> => {
+  const exists = async (ref: string) => (await run(['git', 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`], dir)).exitCode === 0
+  if (settings.mode === 'local') {
     const up = await run(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], dir)
-    if (up.exitCode === 0 && up.stdout.trim()) ref = up.stdout.trim()
+    return { ref: up.exitCode === 0 && up.stdout.trim() ? up.stdout.trim() : null, missing: false }
   }
-  for (const base of tracking ? [] : candidates) {
-    if (await exists(base)) {
-      ref = base
-      break
-    }
+  if (settings.mode === 'branch') {
+    const name = settings.branch.trim()
+    for (const ref of name ? [`origin/${name}`, name] : []) if (await exists(ref)) return { ref, missing: false }
+    return { ref: null, missing: true }
   }
-  const base = ref ? await countAgainst(run, dir, ref) : { ahead: 0, behind: 0 }
-  const remote = branch && (await exists(`origin/${branch}`)) ? await countAgainst(run, dir, `origin/${branch}`) : null
-  // A squash merge that deleted the remote branch leaves commits "ahead" of the base,
-  // yet merging the branch into the base would change nothing: its content has landed.
-  let merged = false
-  if (!tracking && !remote && ref && base.ahead > 0) {
-    const tree = await run(['git', 'merge-tree', '--write-tree', ref, 'HEAD'], dir)
-    const baseTree = await run(['git', 'rev-parse', `${ref}^{tree}`], dir)
-    merged = tree.exitCode === 0 && tree.stdout.trim().split('\n')[0] === baseTree.stdout.trim()
-  }
-  return { ref, ...base, remote, merged }
+  const head = await run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], dir)
+  const candidates = [head.exitCode === 0 ? head.stdout.trim() : '', 'origin/dev', 'origin/main', 'origin/master', 'dev', 'main', 'master']
+  for (const ref of candidates.filter(Boolean)) if (await exists(ref)) return { ref, missing: false }
+  return { ref: null, missing: false }
 }
 
-const readRepo = async (run: Run, dir: string, name: string, withStats: boolean, tracking = false): Promise<RepoInfo> => {
-  const [status, branch, stats] = await Promise.all([
-    run(['git', 'status', '--porcelain=v1', '-uall'], dir),
-    run(['git', 'branch', '--show-current'], dir),
-    withStats ? run(['git', 'diff', 'HEAD', '--numstat'], dir) : Promise.resolve(null),
-  ])
-  const counts = new Map<string, [number, number]>()
-  for (const line of stats?.stdout.split('\n') ?? []) {
-    const [a, r, ...rest] = line.split('\t')
-    if (rest.length) counts.set(rest.join('\t'), [Number(a) || 0, Number(r) || 0])
+const readRepo = async (run: Run, dir: string, name: string, settings: Settings): Promise<RepoInfo> => {
+  const [branchOut, { ref, missing }] = await Promise.all([run(['git', 'branch', '--show-current'], dir), resolveRef(run, dir, settings)])
+  const branch = branchOut.stdout.trim() || '(detached)'
+  // Changes are the working tree against the point the branch left the ref (so commits
+  // that arrived on the ref since are not shown reversed); with no ref, just what is uncommitted.
+  let base = 'HEAD'
+  if (ref) {
+    const mb = await run(['git', 'merge-base', ref, 'HEAD'], dir)
+    base = mb.exitCode === 0 && mb.stdout.trim() ? mb.stdout.trim() : ref
   }
-  const changes: Change[] = status.stdout
+  const [names, stats, untracked, counts] = await Promise.all([
+    run(['git', 'diff', base, '--name-status', '--no-renames'], dir),
+    run(['git', 'diff', base, '--numstat', '--no-renames'], dir),
+    run(['git', 'ls-files', '--others', '--exclude-standard'], dir),
+    ref ? countAgainst(run, dir, ref) : Promise.resolve({ ahead: 0, behind: 0 }),
+  ])
+  const numbers = new Map<string, [number, number]>()
+  for (const line of stats.stdout.split('\n')) {
+    const [a, r, ...rest] = line.split('\t')
+    if (rest.length) numbers.set(rest.join('\t'), [Number(a) || 0, Number(r) || 0])
+  }
+  const tracked: Change[] = names.stdout
     .split('\n')
-    .filter(l => l.length > 3)
-    .map(l => {
-      const code = l.slice(0, 2)
-      const raw = l.slice(3)
-      const path = (raw.includes(' -> ') ? raw.split(' -> ')[1] : raw).replace(/^"|"$/g, '')
-      const [added, removed] = counts.get(path) ?? [0, 0]
-      return { code, path, added, removed }
+    .filter(Boolean)
+    .map(line => {
+      const [code, ...rest] = line.split('\t')
+      const path = rest.join('\t').replace(/^"|"$/g, '')
+      const [added, removed] = numbers.get(path) ?? [0, 0]
+      return { code: code[0], path, added, removed }
     })
-  const { ref, ahead, behind, remote, merged } = await compare(run, dir, branch.stdout.trim(), tracking)
-  return { name, dir, branch: branch.stdout.trim() || '(detached)', changes, ref, ahead, behind, remote, merged }
+  const fresh: Change[] = untracked.stdout
+    .split('\n')
+    .filter(Boolean)
+    .map(path => ({ code: '??', path, added: 0, removed: 0 }))
+  return { name, dir, branch, changes: [...tracked, ...fresh], ref, missing, base, ...counts }
 }
 
 const collect = async ($: any): Promise<Snapshot> => {
+  const settings = await getSettings($)
   // The session root, not the shell cwd (a `cd` moves that); inside a worktree the helena folder is above `worktrees/`.
   const cwd: string = await $.session.root()
   const root = cwd.includes('/worktrees/') ? cwd.slice(0, cwd.indexOf('/worktrees/')) : cwd
   const run: Run = (argv, cwd) => $.process.run(argv, { cwd })
 
   const rootDirs = (await findRepos(run, root, '.', 4)).filter(p => !p.startsWith('./worktrees/'))
-  const roots = await Promise.all(rootDirs.map(p => readRepo(run, `${root}/${p.slice(2)}`, p.slice(2), true, true)))
+  // A project root that is itself a repo shows up as `.`.
+  const roots = await Promise.all(
+    rootDirs.map(p => readRepo(run, p === '.' ? root : `${root}/${p.slice(2)}`, p === '.' ? root.split('/').pop() || root : p.slice(2), settings)),
+  )
 
   const wtDirs = await findRepos(run, root, './worktrees', 5)
   const byWt = new Map<string, RepoInfo[]>()
@@ -125,7 +126,7 @@ const collect = async ($: any): Promise<Snapshot> => {
     wtDirs.map(async p => {
       const [, , wt, ...rest] = p.split('/')
       if (!rest.length) return
-      const info = await readRepo(run, `${root}/${p.slice(2)}`, rest.join('/'), true)
+      const info = await readRepo(run, `${root}/${p.slice(2)}`, rest.join('/'), settings)
       byWt.set(wt, [...(byWt.get(wt) ?? []), info])
     }),
   )
@@ -314,18 +315,18 @@ const rowsOf = (hunk: Hunk): DiffRow[] => {
   })
 }
 
-const diffOf = async ($: any, dir: string, path: string, code: string): Promise<string> => {
+const diffOf = async ($: any, dir: string, path: string, code: string, base: string): Promise<string> => {
   const run: Run = (argv, cwd) => $.process.run(argv, { cwd })
   const out =
     code === '??'
       ? await run(['git', 'diff', '--no-index', '--no-color', '--', '/dev/null', path], dir)
-      : await run(['git', 'diff', 'HEAD', '--no-color', '--', path], dir)
+      : await run(['git', 'diff', base, '--no-color', '--', path], dir)
   return out.stdout || out.stderr
 }
 
 const openFile = async ($: any, repo: RepoInfo, change: Change, origin: string) => {
-  const text = await diffOf($, repo.dir, change.path, change.code)
-  const next: FileView = { origin, repo: repo.name, dir: repo.dir, path: change.path, code: change.code, text }
+  const text = await diffOf($, repo.dir, change.path, change.code, repo.base)
+  const next: FileView = { origin, repo: repo.name, dir: repo.dir, path: change.path, code: change.code, base: repo.base, text }
   await update($, view, () => next)
 }
 
@@ -348,7 +349,7 @@ const openIn = async ($: any, editor: Editor, path: string) => {
 // Refresh the lists and re-read the diff that is open.
 const refreshFile = async ($: any, file: FileView) => {
   await refresh($)
-  const text = await diffOf($, file.dir, file.path, file.code)
+  const text = await diffOf($, file.dir, file.path, file.code, file.base)
   await update($, view, cur => (cur && cur.dir === file.dir && cur.path === file.path ? { ...cur, text } : cur))
 }
 
@@ -363,6 +364,38 @@ const codeColor = (code: string) =>
         : code.includes('U')
           ? 'permission'
           : 'warning'
+
+// The global diff setting, kept across sessions.
+const SETTINGS = 'diffSettings'
+const MODES: Settings['mode'][] = ['local', 'default', 'branch']
+const EDIT_BRANCH = 'edit-branch'
+const MODE_LABELS: Record<Settings['mode'], string> = { local: 'local changes', default: 'default branch', branch: 'branch…' }
+const getSettings = async ($: any): Promise<Settings> => {
+  const v = await $.store.get(SETTINGS)
+  return v && MODES.includes(v.mode) ? { mode: v.mode, branch: String(v.branch ?? '') } : { mode: 'local', branch: '' }
+}
+const setSettings = async ($: any, next: Settings) => {
+  await $.store.set(SETTINGS, next)
+  await update($, settingsTick, n => n + 1)
+  // An open diff was cut against the old base.
+  await update($, view, () => null)
+  await refresh($)
+}
+
+// `branch…` asks for the branch in a popup: the last branch if known, `main` and `master` to click,
+// anything else typed under "Other". Skipping it falls back to local changes and forgets the branch.
+const pickMode = async ($: any, cfg: Settings, mode: Settings['mode']) => {
+  if (mode !== 'branch') return setSettings($, { ...cfg, mode })
+  try {
+    const answer: string = await $.ui.ask('Which branch should diffs be taken against?', {
+      header: 'Diff branch',
+      options: [...new Set([cfg.branch, 'main', 'master'].filter(Boolean))],
+    })
+    // Skip comes back as the text "[No preference]".
+    if (answer.trim() && !/^\[no preference\]$/i.test(answer.trim())) return await setSettings($, { mode, branch: answer.trim() })
+  } catch {}
+  await setSettings($, { mode: 'local', branch: '' })
+}
 
 // The folders the prompt button is pinned for, kept across sessions.
 const PINS = 'pinnedFolders'
@@ -394,7 +427,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'multidiff',
-      description: 'Toggle the Multidiff pane (root repos + worktrees)',
+      description: 'Toggle the Multidiff pane (repos + worktrees)',
     })
     return next(e)
   })
@@ -427,8 +460,10 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Code } = $.ui.resolve(e)
+    const { Box, Text, Button, Code, Select } = $.ui.resolve(e)
     await read($, pinTick)
+    await read($, settingsTick)
+    const cfg = await getSettings($)
     const isPinned = (await getPins($)).includes(await $.session.root())
     const pinButton = (
       <Button key="pin" plain onPress={() => togglePin($)}>
@@ -448,6 +483,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" width="100%">
           <Box width="100%">
+            {pinButton}
             <Button key="back" plain onPress={() => update($, view, () => null)}>
               <Text bold color="suggestion">← </Text>
             </Button>
@@ -460,8 +496,6 @@ export const register: Register = on => {
             <Button key="zed-file" plain onPress={() => openIn($, ZED, filePath)}>
               <Text bold color="suggestion">ⓩ </Text>
             </Button>
-            <Box flexGrow={1} />
-            {pinButton}
           </Box>
           <Box marginTop={1} marginBottom={1}>
             <Text bold>{file.origin}</Text>
@@ -547,60 +581,61 @@ export const register: Register = on => {
       )
     }
 
-    // Whether the branch has a copy on the remote and how it stands against it.
-    const remoteMarker = (repo: RepoInfo) => {
-      const r = repo.remote
-      if (repo.merged) return <Text color="success">merged ✓ into {repo.ref}</Text>
-      if (!r) return <Text dimColor>not pushed</Text>
-      if (r.ahead === 0 && r.behind === 0) return <Text color="success">pushed ✓ in sync</Text>
-      const parts = [r.ahead > 0 ? `↑${r.ahead} unpushed` : '', r.behind > 0 ? `↓${r.behind} behind` : '']
-      return <Text color="warning">pushed ✗ {parts.filter(Boolean).join(' ')}</Text>
-    }
+    // Columns: the name takes the room left and is cut at the end (never wraps); the branch and
+    // the stats are as wide as their longest entry in the same section (the branch capped), so
+    // the rows of a section line up and short branches do not pay for a long one elsewhere.
+    const statsOf = (r: RepoInfo) => `${r.missing ? 'branch does not exist' : r.ref ? `↑${r.ahead} ↓${r.behind}` : 'no upstream'} · ${r.changes.length} changed`
 
-    const files = (p: { id: string; repo: RepoInfo; summary?: boolean; list?: boolean }) => (
-      <Box key={`${p.id}/${p.repo.name}`} flexDirection="column" paddingX={1} marginTop={1}>
-        <Box>
-          <Text bold>{p.repo.name} </Text>
-          <Text dimColor>{p.repo.branch}</Text>
-        </Box>
-        {p.summary && (
-          <Box>
-            <Text dimColor>  </Text>
-            {p.repo.ref ? (
-              <Box>
-                <Text color={p.repo.ahead > 0 ? 'success' : undefined} dimColor={p.repo.ahead === 0}>↑{p.repo.ahead} </Text>
-                <Text color={p.repo.behind > 0 ? 'warning' : undefined} dimColor={p.repo.behind === 0}>↓{p.repo.behind} </Text>
-                {p.id !== ROOT && <Text dimColor>vs {p.repo.ref}</Text>}
+    const repoRow = (id: string, repo: RepoInfo, withFiles: boolean, first: boolean, group: RepoInfo[]) => {
+      const n = repo.changes.length
+      const branchWidth = Math.min(24, Math.max(0, ...group.map(r => r.branch.length))) + 2
+      const statsWidth = Math.max(0, ...group.map(r => statsOf(r).length)) + 1
+      return (
+        <Box key={`${id}/${repo.name}`} flexDirection="column" marginTop={first ? 1 : 0}>
+          <Box paddingX={1} width="100%">
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text bold wrap="truncate-end">{repo.name}</Text>
+            </Box>
+            <Box width={branchWidth} flexShrink={0} justifyContent="flex-end" paddingRight={2}>
+              <Text dimColor wrap="truncate-end">{repo.branch}</Text>
+            </Box>
+            <Box width={statsWidth} flexShrink={0}>
+              <Text>
+                {repo.missing ? (
+                  <Text color="error">branch does not exist</Text>
+                ) : repo.ref ? (
+                  <Text>
+                    <Text color={repo.ahead > 0 ? 'success' : undefined} dimColor={repo.ahead === 0}>↑{repo.ahead} </Text>
+                    <Text color={repo.behind > 0 ? 'warning' : undefined} dimColor={repo.behind === 0}>↓{repo.behind}</Text>
+                  </Text>
+                ) : (
+                  <Text dimColor>no upstream</Text>
+                )}
+                <Text dimColor> · </Text>
+                <Text color={n > 0 ? 'warning' : undefined} dimColor={n === 0}>{n} changed</Text>
+              </Text>
+            </Box>
+          </Box>
+          {withFiles && n === 0 && (
+            <Box marginLeft={3}>
+              <Text dimColor>no changes</Text>
+            </Box>
+          )}
+          {withFiles &&
+            repo.changes.map(c => (
+              <Box key={`${id}/${repo.name}/${c.path}`} marginLeft={3}>
+                {/* Outside the Button: a Button label ignores the Text colors inside it. */}
+                <Text bold color={codeColor(c.code)}>{(c.code.trim() || 'M').padEnd(3)}</Text>
+                <Button key={`open/${id}/${repo.name}/${c.path}`} plain onPress={() => openFile($, repo, c, id === ROOT ? 'Repos' : id)}>
+                  {c.path}
+                </Button>
+                {c.added > 0 && <Text color="success"> +{c.added}</Text>}
+                {c.removed > 0 && <Text color="error"> -{c.removed}</Text>}
               </Box>
-            ) : (
-              <Text dimColor>no upstream</Text>
-            )}
-            <Text dimColor> · </Text>
-            <Text color={p.repo.changes.length > 0 ? 'warning' : undefined} dimColor={p.repo.changes.length === 0}>
-              {p.repo.changes.length} uncommitted
-            </Text>
-            {p.id !== ROOT && <Text dimColor> · </Text>}
-            {p.id !== ROOT && remoteMarker(p.repo)}
-          </Box>
-        )}
-        {p.list !== false && p.repo.changes.length === 0 && (
-          <Box marginLeft={2}>
-            <Text dimColor>  no changes</Text>
-          </Box>
-        )}
-        {(p.list === false ? [] : p.repo.changes).map(c => (
-          <Box key={`${p.id}/${p.repo.name}/${c.path}`} marginLeft={2}>
-            {/* Outside the Button: a Button label ignores the Text colors inside it. */}
-            <Text bold color={codeColor(c.code)}>{'  ' + (c.code.trim() || 'M').padEnd(2)}</Text>
-            <Button key={`open/${p.id}/${p.repo.name}/${c.path}`} plain onPress={() => openFile($, p.repo, c, p.id === ROOT ? 'Root repos' : p.id)}>
-              {c.path}
-            </Button>
-            {c.added > 0 && <Text color="success"> +{c.added}</Text>}
-            {c.removed > 0 && <Text color="error"> -{c.removed}</Text>}
-          </Box>
-        ))}
-      </Box>
-    )
+            ))}
+        </Box>
+      )
+    }
 
     // The folder the editor buttons open: the focused worktree, else the helena folder.
     const contextPath = activeWt ? `${snap.root}/worktrees/${activeWt.name}` : snap.root
@@ -609,6 +644,7 @@ export const register: Register = on => {
     return (
       <Box flexDirection="column">
         <Box width="100%">
+          {pinButton}
           {isFocusing && (
             <Button key="back" plain onPress={() => update($, focus, () => null)}>
               <Text bold color="suggestion">← </Text>
@@ -625,44 +661,39 @@ export const register: Register = on => {
           </Button>
           {err && <Text color="error"> {err}</Text>}
           <Box flexGrow={1} />
-          {pinButton}
+          <Select
+            key="diff-mode"
+            label=""
+            value={cfg.mode}
+            options={[
+              ...MODES.map(value => ({ value, label: value === 'branch' && cfg.mode === 'branch' && cfg.branch ? `branch: ${cfg.branch}` : MODE_LABELS[value] })),
+              // Picking the mode that is already set fires nothing, so editing the branch is its own entry.
+              ...(cfg.mode === 'branch' ? [{ value: EDIT_BRANCH, label: 'change branch…' }] : []),
+            ]}
+            onSelect={v => pickMode($, cfg, v === EDIT_BRANCH ? 'branch' : (v as Settings['mode']))}
+          />
         </Box>
 
-        {(isRoot || !isFocusing) &&
+        {(isRoot || !isFocusing) && snap.roots.length > 0 &&
           section({
             id: ROOT,
-            title: 'Root repos',
+            title: 'Repos',
             summary: `${rootTotal} changed`,
             tone: rootTotal === 0 ? 'success' : 'error',
           })}
-        {!isFocusing && (
-          <Box flexDirection="column" marginTop={1}>
-            {snap.roots.map(r => (
-              <Box key={`root-${r.name}`} paddingX={1}>
-                <Text color={r.changes.length === 0 ? 'success' : 'error'} bold>
-                  {String(r.changes.length).padStart(3)}{' '}
-                </Text>
-                <Text>{r.name} </Text>
-                <Text dimColor>{r.branch}</Text>
-              </Box>
-            ))}
-          </Box>
-        )}
-        {isRoot && (
-          <Box flexDirection="column" marginTop={1}>
-            {snap.roots.map(r => files({ id: ROOT, repo: r, summary: true }))}
-          </Box>
-        )}
+        {(isRoot || !isFocusing) && snap.roots.map((r, i) => repoRow(ROOT, r, isRoot, i === 0, snap.roots))}
 
-        {!isRoot && visible.length === 0 && <Text dimColor>No worktrees.</Text>}
+        {snap.roots.length === 0 && snap.worktrees.length === 0 && (
+          <Box marginTop={1}>
+            <Text dimColor>No repositories found.</Text>
+          </Box>
+        )}
         {visible.map(wt => {
           const total = wt.repos.reduce((n, r) => n + r.changes.length, 0)
           return (
             <Box key={`wt-${wt.name}`} flexDirection="column">
               {section({ id: wt.name, title: wt.name, summary: `${total} changed`, tone: 'inactive', top: isFocusing ? 1 : 2 })}
-              {wt.repos.map(repo => (
-                files({ id: wt.name, repo, summary: true, list: isFocusing })
-              ))}
+              {wt.repos.map((repo, i) => repoRow(wt.name, repo, isFocusing, i === 0, wt.repos))}
             </Box>
           )
         })}
