@@ -2,7 +2,7 @@
 
 ## Known issues
 - [x] Lines don't wrap in the diff view (desktop row renderer: single spaces stay breakable; line number stays on the first wrapped row).
-- [ ] Lines are only shown as fully removed vs. fully added. For modified lines, highlight which part of the line changed (intra-line / word-level diff) to make changes easier to spot.
+- [x] Lines are only shown as fully removed vs. fully added. For modified lines, highlight which part of the line changed (intra-line / word-level diff) to make changes easier to spot.
 
 ## Future work
 - [ ] When viewing the diff of a file, show a collapsible tree view next to it.

@@ -209,23 +209,108 @@ const sourcesOf = (text: string): string[] =>
 // Line numbers are right-aligned in a column this many characters wide (the surface's
 // text is not monospace, so the width comes from a Box, not from padding), so every hunk lines up.
 const GUTTER = 4
-type DiffRow = { marker: ' ' | '+' | '-'; number: number; text: string }
+type Part = { text: string; changed: boolean }
+type DiffRow = { marker: ' ' | '+' | '-'; number: number; parts: Part[] }
+
+// Words, runs of spaces and single symbols: the units a changed line is compared in.
+const tokenize = (text: string) => text.match(/\s+|\w+|[^\w\s]/g) ?? []
+
+// Which tokens of each side are not part of the longest common run of tokens.
+// A line too long to compare token by token only gets its common start and end kept.
+const MAX_CELLS = 40000
+const changedTokens = (a: string[], b: string[]): [boolean[], boolean[]] => {
+  const ca = a.map(() => true)
+  const cb = b.map(() => true)
+  let head = 0
+  while (head < a.length && head < b.length && a[head] === b[head]) head++
+  let tail = 0
+  while (tail < a.length - head && tail < b.length - head && a.at(-1 - tail) === b.at(-1 - tail)) tail++
+  for (let i = 0; i < head; i++) ca[i] = cb[i] = false
+  for (let i = 1; i <= tail; i++) {
+    ca[a.length - i] = false
+    cb[b.length - i] = false
+  }
+  const x = a.slice(head, a.length - tail)
+  const y = b.slice(head, b.length - tail)
+  if (x.length && y.length && x.length * y.length <= MAX_CELLS) {
+    const w = y.length + 1
+    const len = new Uint16Array((x.length + 1) * w)
+    for (let i = x.length - 1; i >= 0; i--)
+      for (let j = y.length - 1; j >= 0; j--)
+        len[i * w + j] = x[i] === y[j] ? len[(i + 1) * w + j + 1] + 1 : Math.max(len[(i + 1) * w + j], len[i * w + j + 1])
+    let i = 0
+    let j = 0
+    while (i < x.length && j < y.length) {
+      if (x[i] === y[j]) {
+        ca[head + i] = cb[head + j] = false
+        i++
+        j++
+      } else if (len[(i + 1) * w + j] >= len[i * w + j + 1]) i++
+      else j++
+    }
+  }
+  return [ca, cb]
+}
+
+// A line split into runs that are changed or not, from its tokens' flags. Nothing is
+// marked when no word is shared: the whole line is then just a different line.
+const partsOf = (tokens: string[], changed: boolean[], other: string[], otherChanged: boolean[]): Part[] => {
+  const shared = (list: string[], flags: boolean[]) => list.some((t, i) => !flags[i] && /\S/.test(t))
+  if (!shared(tokens, changed) || !shared(other, otherChanged)) return [{ text: tokens.join(''), changed: false }]
+  const parts: Part[] = []
+  tokens.forEach((token, i) => {
+    const last = parts.at(-1)
+    if (last && last.changed === changed[i]) last.text += token
+    else parts.push({ text: token, changed: changed[i] })
+  })
+  return parts
+}
+
+// Only indentation and runs of spaces are non-breaking: a lone space stays a plain
+// one, so the surface can break the line there. Same length, so parts are cut from it after.
+const keepSpaces = (text: string) => text.replace(/^ +| {2,}/g, run => NBSP.repeat(run.length))
 
 const rowsOf = (hunk: Hunk): DiffRow[] => {
   let o = hunk.oldStart
   let n = hunk.newStart
-  return hunk.lines.map(line => {
+  const rows = hunk.lines.map(line => {
     const marker = line[0] as DiffRow['marker']
-    // Only indentation and runs of spaces are non-breaking: a lone space stays a plain
-    // one, so the surface can break the line there.
-    const text = line
-      .slice(1)
-      .replace(/\t/g, '    ')
-      .replace(/^ +| {2,}/g, run => NBSP.repeat(run.length))
+    const raw = line.slice(1).replace(/\t/g, '    ')
     const number = marker === '-' ? o : n
     if (marker !== '+') o++
     if (marker !== '-') n++
-    return { marker, number, text }
+    return { marker, number, raw, parts: [{ text: raw, changed: false }] as Part[] }
+  })
+  // A run of removed lines right before a run of added ones: line i of one is the
+  // edit of line i of the other, so the part that differs is marked.
+  for (let i = 0; i < rows.length; ) {
+    if (rows[i].marker !== '-') {
+      i++
+      continue
+    }
+    let mid = i
+    while (mid < rows.length && rows[mid].marker === '-') mid++
+    let end = mid
+    while (end < rows.length && rows[end].marker === '+') end++
+    for (let k = 0; k < Math.min(mid - i, end - mid); k++) {
+      const del = rows[i + k]
+      const add = rows[mid + k]
+      const a = tokenize(del.raw)
+      const b = tokenize(add.raw)
+      const [ca, cb] = changedTokens(a, b)
+      del.parts = partsOf(a, ca, b, cb)
+      add.parts = partsOf(b, cb, a, ca)
+    }
+    i = end
+  }
+  return rows.map(({ marker, number, raw, parts }) => {
+    const kept = keepSpaces(raw)
+    let at = 0
+    return {
+      marker,
+      number,
+      parts: parts.map(part => ({ changed: part.changed, text: kept.slice(at, (at += part.text.length)) })),
+    }
   })
 }
 
@@ -327,7 +412,7 @@ export const register: Register = on => {
     return (
       <Box>
         <Button key="multi-diff" plain onPress={() => togglePane($)}>
-          <Text bold color="cyan">⎇ multidiff</Text>
+          <Text bold color="suggestion">⎇ multidiff</Text>
         </Button>
       </Box>
     )
@@ -347,7 +432,7 @@ export const register: Register = on => {
     const isPinned = (await getPins($)).includes(await $.session.root())
     const pinButton = (
       <Button key="pin" plain onPress={() => togglePin($)}>
-        <Text bold color="cyan">{isPinned ? '⚑ ' : '⚐ '}</Text>
+        <Text bold color="suggestion">{isPinned ? '⚑ ' : '⚐ '}</Text>
       </Button>
     )
     const snap = await read($, snapshot)
@@ -364,16 +449,16 @@ export const register: Register = on => {
         <Box flexDirection="column" width="100%">
           <Box width="100%">
             <Button key="back" plain onPress={() => update($, view, () => null)}>
-              <Text bold color="cyan">← </Text>
+              <Text bold color="suggestion">← </Text>
             </Button>
             <Button key="refresh-file" plain onPress={() => refreshFile($, file)}>
-              <Text bold color="cyan">↻ </Text>
+              <Text bold color="suggestion">↻ </Text>
             </Button>
             <Button key="code-file" plain onPress={() => openIn($, VSCODE, filePath)}>
-              <Text bold color="cyan">ⓥ </Text>
+              <Text bold color="suggestion">ⓥ </Text>
             </Button>
             <Button key="zed-file" plain onPress={() => openIn($, ZED, filePath)}>
-              <Text bold color="cyan">ⓩ </Text>
+              <Text bold color="suggestion">ⓩ </Text>
             </Button>
             <Box flexGrow={1} />
             {pinButton}
@@ -408,7 +493,18 @@ export const register: Register = on => {
                             </Text>
                           </Box>
                           <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                            <Text wrap="wrap">{r.text || NBSP}</Text>
+                            <Text wrap="wrap">
+                              {r.parts.length === 1 && !r.parts[0].text
+                                ? NBSP
+                                : r.parts.map((part, k) => (
+                                    <Text
+                                      key={`part-${k}`}
+                                      backgroundColor={part.changed ? (r.marker === '+' ? 'diffAddedWord' : 'diffRemovedWord') : undefined}
+                                    >
+                                      {part.text}
+                                    </Text>
+                                  ))}
+                            </Text>
                           </Box>
                         </Box>
                       )
@@ -515,19 +611,19 @@ export const register: Register = on => {
         <Box width="100%">
           {isFocusing && (
             <Button key="back" plain onPress={() => update($, focus, () => null)}>
-              <Text bold color="cyan">← </Text>
+              <Text bold color="suggestion">← </Text>
             </Button>
           )}
           <Button key="refresh" plain onPress={() => refresh($)}>
-            <Text bold color="cyan">↻ </Text>
+            <Text bold color="suggestion">↻ </Text>
           </Button>
           <Button key="code" plain onPress={() => openIn($, VSCODE, contextPath)}>
-            <Text bold color="cyan">ⓥ </Text>
+            <Text bold color="suggestion">ⓥ </Text>
           </Button>
           <Button key="zed" plain onPress={() => openIn($, ZED, contextPath)}>
-            <Text bold color="cyan">ⓩ </Text>
+            <Text bold color="suggestion">ⓩ </Text>
           </Button>
-          {err && <Text color="red"> {err}</Text>}
+          {err && <Text color="error"> {err}</Text>}
           <Box flexGrow={1} />
           {pinButton}
         </Box>
@@ -543,7 +639,7 @@ export const register: Register = on => {
           <Box flexDirection="column" marginTop={1}>
             {snap.roots.map(r => (
               <Box key={`root-${r.name}`} paddingX={1}>
-                <Text color={r.changes.length === 0 ? 'green' : 'red'} bold>
+                <Text color={r.changes.length === 0 ? 'success' : 'error'} bold>
                   {String(r.changes.length).padStart(3)}{' '}
                 </Text>
                 <Text>{r.name} </Text>
