@@ -16,7 +16,10 @@ declare module 'claude-code' {
       collapsed: string[]
       error: string | null
       pinTick: number
+      wordTick: number
       settingsTick: number
+      expanded: Record<string, { up: number; down: number }>
+      pages: Record<string, number>
     }
   }
 }
