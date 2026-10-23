@@ -205,7 +205,7 @@ const sourcesOf = (text: string): string[] =>
 
 // Surfaces that do not draw a `Code` diff themselves get the rows drawn here: a gutter
 // numbered from the hunk's header, the marker, add and remove colours.
-// Plain spaces are collapsed by the surface, so the line's own are non-breaking.
+// Plain spaces are collapsed by the surface, so indentation and space runs are non-breaking.
 // Line numbers are right-aligned in a column this many characters wide (the surface's
 // text is not monospace, so the width comes from a Box, not from padding), so every hunk lines up.
 const GUTTER = 4
@@ -216,7 +216,12 @@ const rowsOf = (hunk: Hunk): DiffRow[] => {
   let n = hunk.newStart
   return hunk.lines.map(line => {
     const marker = line[0] as DiffRow['marker']
-    const text = line.slice(1).replace(/\t/g, '    ').replace(/ /g, NBSP)
+    // Only indentation and runs of spaces are non-breaking: a lone space stays a plain
+    // one, so the surface can break the line there.
+    const text = line
+      .slice(1)
+      .replace(/\t/g, '    ')
+      .replace(/^ +| {2,}/g, run => NBSP.repeat(run.length))
     const number = marker === '-' ? o : n
     if (marker !== '+') o++
     if (marker !== '-') n++
@@ -393,7 +398,7 @@ export const register: Register = on => {
                     {rows.map((r, j) => {
                       const background = r.marker === '+' ? 'diffAddedDimmed' : r.marker === '-' ? 'diffRemovedDimmed' : undefined
                       return (
-                        <Box key={`row-${j}`} width="100%" backgroundColor={background}>
+                        <Box key={`row-${j}`} width="100%" alignItems="flex-start" backgroundColor={background}>
                           <Box width={GUTTER + 1} flexShrink={0} justifyContent="flex-end">
                             <Text dimColor>{r.number}</Text>
                           </Box>
@@ -402,7 +407,7 @@ export const register: Register = on => {
                               {r.marker === ' ' ? NBSP : r.marker}
                             </Text>
                           </Box>
-                          <Box flexGrow={1}>
+                          <Box flexGrow={1} flexShrink={1} minWidth={0}>
                             <Text wrap="wrap">{r.text || NBSP}</Text>
                           </Box>
                         </Box>
