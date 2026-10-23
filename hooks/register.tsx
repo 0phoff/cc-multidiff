@@ -83,25 +83,31 @@ const readRepo = async (run: Run, dir: string, name: string, settings: Settings)
     base = mb.exitCode === 0 && mb.stdout.trim() ? mb.stdout.trim() : ref
   }
   const [names, stats, untracked, counts] = await Promise.all([
-    run(['git', 'diff', base, '--name-status', '--no-renames'], dir),
-    run(['git', 'diff', base, '--numstat', '--no-renames'], dir),
+    run(['git', 'diff', base, '--name-status', '-M', '-z'], dir),
+    run(['git', 'diff', base, '--numstat', '-M', '-z'], dir),
     run(['git', 'ls-files', '--others', '--exclude-standard'], dir),
     ref ? countAgainst(run, dir, ref) : Promise.resolve({ ahead: 0, behind: 0 }),
   ])
+  // NUL-separated, so paths come unquoted. A rename is `R<score> old new` and, in the
+  // numstat, `a r <empty>` followed by the old and the new path.
   const numbers = new Map<string, [number, number]>()
-  for (const line of stats.stdout.split('\n')) {
-    const [a, r, ...rest] = line.split('\t')
-    if (rest.length) numbers.set(rest.join('\t'), [Number(a) || 0, Number(r) || 0])
+  const stat = stats.stdout.split('\0')
+  for (let i = 0; i < stat.length; ) {
+    const [a, r, path] = stat[i++].split('\t')
+    if (a === undefined || r === undefined) continue
+    const key = path === '' ? (i++, stat[i++]) : path
+    if (key) numbers.set(key, [Number(a) || 0, Number(r) || 0])
   }
-  const tracked: Change[] = names.stdout
-    .split('\n')
-    .filter(Boolean)
-    .map(line => {
-      const [code, ...rest] = line.split('\t')
-      const path = rest.join('\t').replace(/^"|"$/g, '')
-      const [added, removed] = numbers.get(path) ?? [0, 0]
-      return { code: code[0], path, added, removed }
-    })
+  const tracked: Change[] = []
+  const status = names.stdout.split('\0')
+  for (let i = 0; i < status.length; ) {
+    const code = status[i++]
+    if (!code) continue
+    const from = code[0] === 'R' ? status[i++] : undefined
+    const path = status[i++]
+    const [added, removed] = numbers.get(path) ?? [0, 0]
+    tracked.push({ code: code[0], path, added, removed, ...(from ? { from } : {}) })
+  }
   const fresh: Change[] = untracked.stdout
     .split('\n')
     .filter(Boolean)
@@ -183,8 +189,8 @@ const refreshOnce = async ($: any) => {
     // The diff that is open follows the files.
     const open = await read($, view)
     if (open) {
-      const text = await diffOf($, open.dir, open.path, open.code, open.base)
-      await update($, view, cur => (cur && cur.dir === open.dir && cur.path === open.path ? { ...cur, text } : cur))
+      const { text, moved } = await diffOf($, open.dir, open.path, open.from, open.code, open.base)
+      await update($, view, cur => (cur && cur.dir === open.dir && cur.path === open.path ? { ...cur, text, moved } : cur))
     }
   } catch (err) {
     await update($, error, () => String(err))
@@ -193,7 +199,8 @@ const refreshOnce = async ($: any) => {
 
 // The diff is read as git prints it (three lines of context) and drawn as the
 // built-in /diff draws it: one `Code` block a hunk, with line numbers and colours.
-type Hunk = { oldStart: number; newStart: number; lines: string[] }
+// `moved[i]` is true when `lines[i]` is a line git reports as moved, not added or removed.
+type Hunk = { oldStart: number; newStart: number; lines: string[]; moved: boolean[] }
 
 // A `Code` source holds at most 10000 characters; leave room for the header.
 const MAX_SOURCE_CHARS = 9000
@@ -203,13 +210,17 @@ const MAX_SOURCE_CHARS = 9000
 const UNSAFE = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g
 const clean = (line: string) => line[0] + line.slice(1).replace(UNSAFE, '')
 
-const parseHunks = (text: string): Hunk[] => {
+const parseHunks = (text: string, moved: number[] = []): Hunk[] => {
   const hunks: Hunk[] = []
-  for (const line of text.split('\n')) {
+  const movedAt = new Set(moved)
+  text.split('\n').forEach((line, index) => {
     const m = /^@@ -(\d+)(?:,\d+)? \+(\d+)/.exec(line)
-    if (m) hunks.push({ oldStart: Number(m[1]), newStart: Number(m[2]), lines: [] })
-    else if (hunks.length && (line[0] === ' ' || line[0] === '+' || line[0] === '-')) hunks.at(-1)!.lines.push(clean(line))
-  }
+    if (m) hunks.push({ oldStart: Number(m[1]), newStart: Number(m[2]), lines: [], moved: [] })
+    else if (hunks.length && (line[0] === ' ' || line[0] === '+' || line[0] === '-')) {
+      hunks.at(-1)!.lines.push(clean(line))
+      hunks.at(-1)!.moved.push(movedAt.has(index))
+    }
+  })
   return hunks
 }
 
@@ -254,7 +265,7 @@ const sourcesOf = (text: string): string[] =>
 // text is not monospace, so the width comes from a Box, not from padding), so every hunk lines up.
 const GUTTER = 4
 type Part = { text: string; changed: boolean }
-type DiffRow = { marker: ' ' | '+' | '-'; number: number; parts: Part[] }
+type DiffRow = { marker: ' ' | '+' | '-'; number: number; moved: boolean; parts: Part[] }
 
 // Words, runs of spaces and single symbols: the units a changed line is compared in.
 const tokenize = (text: string) => text.match(/\s+|\w+|[^\w\s]/g) ?? []
@@ -317,13 +328,13 @@ const keepSpaces = (text: string) => text.replace(/^ +| {2,}/g, run => NBSP.repe
 const rowsOf = (hunk: Hunk): DiffRow[] => {
   let o = hunk.oldStart
   let n = hunk.newStart
-  const rows = hunk.lines.map(line => {
+  const rows = hunk.lines.map((line, index) => {
     const marker = line[0] as DiffRow['marker']
     const raw = line.slice(1).replace(/\t/g, '    ')
     const number = marker === '-' ? o : n
     if (marker !== '+') o++
     if (marker !== '-') n++
-    return { marker, number, raw, parts: [{ text: raw, changed: false }] as Part[] }
+    return { marker, number, raw, moved: hunk.moved[index], parts: [{ text: raw, changed: false }] as Part[] }
   })
   // A run of removed lines right before a run of added ones: line i of one is the
   // edit of line i of the other, so the part that differs is marked.
@@ -339,6 +350,8 @@ const rowsOf = (hunk: Hunk): DiffRow[] => {
     for (let k = 0; k < Math.min(mid - i, end - mid); k++) {
       const del = rows[i + k]
       const add = rows[mid + k]
+      // A moved line is the same line somewhere else: nothing inside it changed.
+      if (del.moved || add.moved) continue
       const a = tokenize(del.raw)
       const b = tokenize(add.raw)
       const [ca, cb] = changedTokens(a, b)
@@ -347,29 +360,88 @@ const rowsOf = (hunk: Hunk): DiffRow[] => {
     }
     i = end
   }
-  return rows.map(({ marker, number, raw, parts }) => {
+  return rows.map(({ marker, number, moved, raw, parts }) => {
     const kept = keepSpaces(raw)
     let at = 0
     return {
       marker,
       number,
+      moved,
       parts: parts.map(part => ({ changed: part.changed, text: kept.slice(at, (at += part.text.length)) })),
     }
   })
 }
 
-const diffOf = async ($: any, dir: string, path: string, code: string, base: string): Promise<string> => {
+// git's own detection of moved lines needs the whole diff (a block can move between
+// files), so the file's diff is cut out of the repo's, with the moved colours pinned to
+// magenta to tell them from the rest. The settings of the person (prefixes, colours) are overridden.
+const ANSI = /\x1b\[[0-9;]*m/g
+const MOVED_COLORS = ['oldMoved', 'newMoved', 'oldMovedAlternative', 'newMovedAlternative', 'oldMovedDimmed', 'newMovedDimmed', 'oldMovedAlternativeDimmed', 'newMovedAlternativeDimmed']
+const GIT_DIFF = [
+  'git',
+  '-c', 'core.quotePath=false',
+  '-c', 'diff.mnemonicPrefix=false',
+  '-c', 'diff.noprefix=false',
+  '-c', 'color.diff.old=red',
+  '-c', 'color.diff.new=green',
+  ...MOVED_COLORS.flatMap(name => ['-c', `color.diff.${name}=magenta`]),
+  'diff',
+]
+const MOVED_START = '\x1b[35m'
+// Moved lines are drawn orange where they left and blue where they arrived: the marker
+// is a theme key, the row a tint picked for the theme (no theme key is a dim orange or blue).
+const MOVED_TINTS = {
+  dark: { from: '#4a3315', to: '#1c3050' },
+  light: { from: '#ffe3c2', to: '#d4e4ff' },
+}
+// Any theme with `light` in its name (light, light-daltonized, light-ansi); `auto` counts as dark.
+const isLightTheme = async ($: any): Promise<boolean> => {
+  try {
+    const row = (await $.config.list()).find((r: { key: string }) => r.key === 'theme')
+    return typeof row?.value === 'string' && /light/i.test(row.value)
+  } catch {
+    return false
+  }
+}
+
+// The file's section of a coloured repo diff, as plain text and the indexes of its moved lines.
+const sectionOf = (all: string, path: string): { text: string; moved: number[] } | null => {
+  const lines: string[] = []
+  const moved: number[] = []
+  let take = false
+  let inHunk = false
+  for (const raw of all.split('\n')) {
+    const plain = raw.replace(ANSI, '')
+    if (plain.startsWith('diff --git ')) {
+      take = plain.endsWith(` b/${path}`)
+      inHunk = false
+    }
+    if (!take) continue
+    if (plain.startsWith('@@')) inHunk = true
+    if (inHunk && (plain[0] === '+' || plain[0] === '-') && raw.startsWith(MOVED_START)) moved.push(lines.length)
+    lines.push(plain)
+  }
+  return lines.length ? { text: lines.join('\n'), moved } : null
+}
+
+type FileDiff = { text: string; moved: number[] }
+const diffOf = async ($: any, dir: string, path: string, from: string | undefined, code: string, base: string): Promise<FileDiff> => {
   const run: Run = (argv, cwd) => $.process.run(argv, { cwd })
-  const out =
-    code === '??'
-      ? await run(['git', 'diff', '--no-index', '--no-color', '--', '/dev/null', path], dir)
-      : await run(['git', 'diff', base, '--no-color', '--', path], dir)
-  return out.stdout || out.stderr
+  if (code === '??') {
+    const out = await run(['git', 'diff', '--no-index', '--no-color', '--', '/dev/null', path], dir)
+    return { text: out.stdout || out.stderr, moved: [] }
+  }
+  const all = await run([...GIT_DIFF, base, '-M', '--color=always', '--color-moved=plain'], dir)
+  const section = all.exitCode === 0 ? sectionOf(all.stdout, path) : null
+  if (section) return section
+  // Without the repo's diff, the file's own: no moved lines, a rename only when both paths are named.
+  const out = await run(['git', 'diff', base, '-M', '--no-color', '--src-prefix=a/', '--dst-prefix=b/', '--', ...(from ? [from, path] : [path])], dir)
+  return { text: out.stdout || out.stderr, moved: [] }
 }
 
 const openFile = async ($: any, repo: RepoInfo, change: Change, origin: string) => {
-  const text = await diffOf($, repo.dir, change.path, change.code, repo.base)
-  const next: FileView = { origin, repo: repo.name, dir: repo.dir, path: change.path, code: change.code, base: repo.base, text }
+  const { text, moved } = await diffOf($, repo.dir, change.path, change.from, change.code, repo.base)
+  const next: FileView = { origin, repo: repo.name, dir: repo.dir, path: change.path, from: change.from, code: change.code, base: repo.base, text, moved }
   await update($, view, () => next)
 }
 
@@ -530,6 +602,7 @@ export const register: Register = on => {
     await read($, pinTick)
     await read($, settingsTick)
     const cfg = await getSettings($)
+    const tints = MOVED_TINTS[(await isLightTheme($)) ? 'light' : 'dark']
     const isPinned = (await getPins($)).includes(await $.session.root())
     const pinButton = (
       <Button key="pin" plain onPress={() => togglePin($)}>
@@ -547,7 +620,7 @@ export const register: Register = on => {
     // The open file's diff, drawn beside the tree.
     const diffPanel = (file: FileView) => {
       const sources = sourcesOf(file.text)
-      const hunks = parseHunks(file.text)
+      const hunks = parseHunks(file.text, file.moved)
       // A deleted file has nothing to open: open its repo folder instead.
       const filePath = file.code.includes('D') ? file.dir : `${file.dir}/${file.path}`
       return (
@@ -557,6 +630,7 @@ export const register: Register = on => {
               <Text>
                 <Text dimColor>{file.repo}: </Text>
                 <Text bold>{file.path}</Text>
+                {file.from && <Text dimColor>  ← renamed from {file.from}</Text>}
               </Text>
             </Box>
             <Button key="code-file" plain onPress={() => openIn($, VSCODE, filePath)}>
@@ -567,7 +641,9 @@ export const register: Register = on => {
             </Button>
           </Box>
           <Box marginTop={1} flexDirection="column" width="100%">
-            {sources.length === 0 && <Text dimColor>{file.text.trim() || 'No textual changes (binary or mode change).'}</Text>}
+            {sources.length === 0 && (
+              <Text dimColor>{file.from && !/^Binary/m.test(file.text) ? 'Renamed without changes.' : file.text.trim() || 'No textual changes (binary or mode change).'}</Text>
+            )}
             {e.surface === 'terminal'
               ? sources.map((source, i) => (
                   <Box key={`code-${i}`} width="100%">
@@ -579,14 +655,14 @@ export const register: Register = on => {
                   return (
                     <Box key={`hunk-${i}`} flexDirection="column" width="100%" marginTop={i === 0 ? 0 : 1}>
                       {rows.map((r, j) => {
-                        const background = r.marker === '+' ? 'diffAddedDimmed' : r.marker === '-' ? 'diffRemovedDimmed' : undefined
+                        const background = r.moved ? (r.marker === '-' ? tints.from : tints.to) : r.marker === '+' ? 'diffAddedDimmed' : r.marker === '-' ? 'diffRemovedDimmed' : undefined
                         return (
                           <Box key={`row-${j}`} width="100%" alignItems="flex-start" backgroundColor={background}>
                             <Box width={GUTTER + 1} flexShrink={0} justifyContent="flex-end">
                               <Text dimColor>{r.number}</Text>
                             </Box>
                             <Box width={3} flexShrink={0} paddingLeft={1}>
-                              <Text bold color={r.marker === '+' ? 'success' : r.marker === '-' ? 'error' : undefined}>
+                              <Text bold color={r.moved ? (r.marker === '-' ? 'warning' : 'suggestion') : r.marker === '+' ? 'success' : r.marker === '-' ? 'error' : undefined}>
                                 {r.marker === ' ' ? NBSP : r.marker}
                               </Text>
                             </Box>
