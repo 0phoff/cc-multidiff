@@ -12,6 +12,7 @@ declare module 'claude-code' {
     'multi-diff': {
       snapshot: Snapshot | null
       focus: string | null
+      focusRepo: string | null
       view: FileView | null
       collapsed: string[]
       error: string | null

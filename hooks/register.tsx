@@ -24,6 +24,8 @@ import type { WorktreeInfo } from '../types'
 // The state atoms, with their starting values. The other modules spell the reference of the ones they use.
 const snapshot = atom({ plugin: 'multi-diff', key: 'snapshot' } as const, null)
 const focus = atom({ plugin: 'multi-diff', key: 'focus' } as const, null)
+// The repo the focused section is narrowed to (its name), or null for all of the section's repos.
+const focusRepo = atom({ plugin: 'multi-diff', key: 'focusRepo' } as const, null)
 const view = atom({ plugin: 'multi-diff', key: 'view' } as const, null)
 const error = atom({ plugin: 'multi-diff', key: 'error' } as const, null)
 // The tree nodes (repo and folder keys) the person has folded.
@@ -56,6 +58,7 @@ const paneRender = async ($: any, e: any) => {
   const menuIsOpen = await read($, menuOpen)
   const snap = await read($, snapshot)
   const focused = await read($, focus)
+  const only = await read($, focusRepo)
   const file = await read($, view)
   const err = await read($, error)
 
@@ -95,7 +98,7 @@ const paneRender = async ($: any, e: any) => {
       {toolbar($, ctx, { isFocusing, err, cfg, isPinned, menuIsOpen, contextPath })}
 
       {(isRoot || !isFocusing) && snap.roots.length > 0 && section($, ctx, { id: ROOT, title: 'Repos', summary: `${rootTotal} changed` })}
-      {(isRoot || !isFocusing) && (isRoot ? [focusBody($, ctx, ROOT, snap.roots)] : snap.roots.map((r, i) => repoRow(ctx, ROOT, r, i === 0, snap.roots)))}
+      {(isRoot || !isFocusing) && (isRoot ? [focusBody($, ctx, ROOT, snap.roots, only)] : snap.roots.map((r, i) => repoRow($, ctx, ROOT, r, i === 0, snap.roots)))}
 
       {snap.roots.length === 0 && snap.worktrees.length === 0 && (
         <Box marginTop={1}>
@@ -107,7 +110,7 @@ const paneRender = async ($: any, e: any) => {
         return (
           <Box key={`wt-${wt.name}`} flexDirection="column">
             {section($, ctx, { id: wt.name, title: wt.name, summary: `${total} changed`, top: isFocusing ? 1 : 2 })}
-            {isFocusing ? focusBody($, ctx, wt.name, wt.repos) : wt.repos.map((repo, i) => repoRow(ctx, wt.name, repo, i === 0, wt.repos))}
+            {isFocusing ? focusBody($, ctx, wt.name, wt.repos, only) : wt.repos.map((repo, i) => repoRow($, ctx, wt.name, repo, i === 0, wt.repos))}
           </Box>
         )
       })}

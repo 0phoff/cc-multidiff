@@ -8,6 +8,7 @@ import type { Ctx } from './ctx'
 
 // References to the plugin's state atoms, which are defined in register.tsx. The plugin loader reads
 // the plugin and key off a literal in the file that reads or writes the atom, so each file spells its own.
+const focusRepo = { plugin: 'multi-diff', key: 'focusRepo' } as const
 const focus = { plugin: 'multi-diff', key: 'focus' } as const
 const menuOpen = { plugin: 'multi-diff', key: 'menuOpen' } as const
 const view = { plugin: 'multi-diff', key: 'view' } as const
@@ -28,7 +29,7 @@ export function toolbar($: any, ctx: Ctx, { isFocusing, err, cfg, isPinned, menu
   return [
     <Box key="toolbar" width="100%">
       {isFocusing && (
-        <Button key="back" plain onPress={async () => { await update($, view, () => null); await update($, focus, () => null) }}>
+        <Button key="back" plain onPress={async () => { await update($, view, () => null); await update($, focusRepo, () => null); await update($, focus, () => null) }}>
           <Text bold color={colors.accent}>← </Text>
         </Button>
       )}

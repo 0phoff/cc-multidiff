@@ -8,6 +8,7 @@ import type { Change, FileView, RepoInfo, Settings } from '../types'
 const collapsed = { plugin: 'multi-diff', key: 'collapsed' } as const
 const error = { plugin: 'multi-diff', key: 'error' } as const
 const expanded = { plugin: 'multi-diff', key: 'expanded' } as const
+const focusRepo = { plugin: 'multi-diff', key: 'focusRepo' } as const
 const focus = { plugin: 'multi-diff', key: 'focus' } as const
 const menuOpen = { plugin: 'multi-diff', key: 'menuOpen' } as const
 const movedTick = { plugin: 'multi-diff', key: 'movedTick' } as const
@@ -85,6 +86,13 @@ export async function openFile($: any, repo: RepoInfo, change: Change, origin: s
   const { text, moved } = await diffOf($, repo.dir, change.path, change.from, change.code, repo.base, changedLines(repo))
   const next: FileView = { origin, repo: repo.name, dir: repo.dir, path: change.path, from: change.from, code: change.code, base: repo.base, text, moved }
   await update($, view, () => next)
+}
+
+// Shows one repo of a section alone: its tree, and the diff of the file picked from it.
+export async function focusOnRepo($: any, id: string, name: string) {
+  await update($, view, () => null)
+  await update($, focusRepo, () => name)
+  await update($, focus, () => id)
 }
 
 // The global diff setting, kept across sessions.
@@ -174,6 +182,7 @@ export async function killPlugin($: any) {
   await $.ui.close({ id: PANE })
   await update($, snapshot, () => null)
   await update($, focus, () => null)
+  await update($, focusRepo, () => null)
   await update($, view, () => null)
   await update($, error, () => null)
   await update($, collapsed, () => [])

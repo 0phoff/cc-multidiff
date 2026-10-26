@@ -1,6 +1,7 @@
 import { update } from 'claude-code'
 
 import { colors } from '../colors'
+import { focusOnRepo } from '../state'
 import { toBold } from '../util'
 import type { RepoInfo } from '../../types'
 import type { Ctx } from './ctx'
@@ -8,6 +9,7 @@ import type { Ctx } from './ctx'
 // References to the plugin's state atoms, which are defined in register.tsx. The plugin loader reads
 // the plugin and key off a literal in the file that reads or writes the atom, so each file spells its own.
 const focus = { plugin: 'multi-diff', key: 'focus' } as const
+const focusRepo = { plugin: 'multi-diff', key: 'focusRepo' } as const
 const view = { plugin: 'multi-diff', key: 'view' } as const
 
 // The ahead/behind of a repo against the compared ref, as drawn in the overview and under a repo in the tree.
@@ -30,6 +32,7 @@ export function section($: any, { Box, Text, Button }: Ctx, p: { id: string; tit
   // target, with an em dash between the title and the count.
   const press = async () => {
     await update($, view, () => null)
+    await update($, focusRepo, () => null)
     await update($, focus, cur => (cur === p.id ? null : p.id))
   }
   return (
@@ -57,8 +60,8 @@ export function section($: any, { Box, Text, Button }: Ctx, p: { id: string; tit
 const syncOf = (r: RepoInfo) => (r.missing ? 'branch does not exist' : r.ref ? `↑${r.ahead} ↓${r.behind}` : 'no upstream')
 const changedOf = (r: RepoInfo) => `${r.changes.length} changed`
 
-export const repoRow = (ctx: Ctx, id: string, repo: RepoInfo, first: boolean, group: RepoInfo[]) => {
-  const { Box, Text } = ctx
+export function repoRow($: any, ctx: Ctx, id: string, repo: RepoInfo, first: boolean, group: RepoInfo[]) {
+  const { Box, Text, Button } = ctx
   const n = repo.changes.length
   const branchWidth = Math.min(24, Math.max(0, ...group.map(r => r.branch.length))) + 2
   const syncWidth = Math.max(0, ...group.map(r => syncOf(r).length)) + 2
@@ -67,7 +70,9 @@ export const repoRow = (ctx: Ctx, id: string, repo: RepoInfo, first: boolean, gr
     <Box key={`${id}/${repo.name}`} flexDirection="column" marginTop={first ? 1 : 0}>
       <Box paddingX={1} width="100%">
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text bold wrap="truncate-end">{repo.name}</Text>
+          <Button key={`only-${id}-${repo.name}`} plain onPress={() => focusOnRepo($, id, repo.name)}>
+            {toBold(repo.name)}
+          </Button>
         </Box>
         <Box width={branchWidth} flexShrink={0} justifyContent="flex-end" paddingRight={2}>
           <Text dimColor wrap="truncate-end">{repo.branch}</Text>
