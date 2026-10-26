@@ -102,7 +102,7 @@ const paneRender = async ($: any, e: any) => {
     <Box flexDirection="column">
       {toolbar($, ctx, { isFocusing, err, cfg, isPinned, menuIsOpen, contextPath })}
 
-      {(isRoot || !isFocusing) && snap.roots.length > 0 && section($, ctx, { id: ROOT, title: 'Repositories', summary: `${rootTotal} changed` })}
+      {(isRoot || !isFocusing) && snap.roots.length > 0 && section($, ctx, { id: ROOT, title: `Repositories: ${snap.root.split('/').filter(Boolean).pop() ?? snap.root}`, summary: `${rootTotal} changed` })}
       {(isRoot || !isFocusing) && (isRoot ? [focusBody($, ctx, ROOT, snap.roots, only)] : snap.roots.map((r, i) => repoRow($, ctx, ROOT, r, i === 0, snap.roots)))}
 
       {snap.roots.length === 0 && snap.worktrees.length === 0 && (
