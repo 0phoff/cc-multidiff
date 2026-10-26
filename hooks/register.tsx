@@ -857,6 +857,19 @@ const paneRender = async ($: any, e: any) => {
   const syncOf = (r: RepoInfo) => (r.missing ? 'branch does not exist' : r.ref ? `↑${r.ahead} ↓${r.behind}` : 'no upstream')
   const changedOf = (r: RepoInfo) => `${r.changes.length} changed`
 
+  // The ahead/behind of a repo against the compared ref, as drawn in the overview and under a repo in the tree.
+  const syncLabel = (repo: RepoInfo) =>
+    repo.missing ? (
+      <Text color="error">branch does not exist</Text>
+    ) : repo.ref ? (
+      <Text>
+        <Text color={repo.ahead > 0 ? 'success' : undefined} dimColor={repo.ahead === 0}>↑{repo.ahead} </Text>
+        <Text color={repo.behind > 0 ? 'warning' : undefined} dimColor={repo.behind === 0}>↓{repo.behind}</Text>
+      </Text>
+    ) : (
+      <Text dimColor>no upstream</Text>
+    )
+
   const repoRow = (id: string, repo: RepoInfo, first: boolean, group: RepoInfo[]) => {
     const n = repo.changes.length
     const branchWidth = Math.min(24, Math.max(0, ...group.map(r => r.branch.length))) + 2
@@ -872,16 +885,7 @@ const paneRender = async ($: any, e: any) => {
             <Text dimColor wrap="truncate-end">{repo.branch}</Text>
           </Box>
           <Box width={syncWidth} flexShrink={0} justifyContent="center">
-            {repo.missing ? (
-              <Text color="error">branch does not exist</Text>
-            ) : repo.ref ? (
-              <Text>
-                <Text color={repo.ahead > 0 ? 'success' : undefined} dimColor={repo.ahead === 0}>↑{repo.ahead} </Text>
-                <Text color={repo.behind > 0 ? 'warning' : undefined} dimColor={repo.behind === 0}>↓{repo.behind}</Text>
-              </Text>
-            ) : (
-              <Text dimColor>no upstream</Text>
-            )}
+            {syncLabel(repo)}
           </Box>
           <Box width={changedWidth} flexShrink={0} justifyContent="flex-end">
             <Text color={n > 0 ? 'warning' : undefined} dimColor={n === 0}>{changedOf(repo)}</Text>
@@ -929,15 +933,21 @@ const paneRender = async ($: any, e: any) => {
       <Box key={`body-${id}`} width="100%" marginTop={1}>
         <Box width={36} flexShrink={0} flexDirection="column" paddingRight={1}>
           {changed.length === 0 && <Text dimColor>no changes</Text>}
-          {changed.flatMap(repo => {
+          {changed.flatMap((repo, index) => {
             const key = `${id}/${repo.name}`
             const isClosed = closed.includes(key)
             return [
-              <Box key={`repo/${key}`}>
+              <Box key={`repo/${key}`} marginTop={index > 0 ? 1 : 0}>
                 <Button key={`fold/${key}`} plain onPress={() => toggle(key)}>
-                  {`${isClosed ? '▸' : '▾'} ${repo.name}`}
+                  {`${isClosed ? '▸' : '▾'} ${toBold(repo.name)}`}
                 </Button>
-                <Text dimColor> {repo.changes.length}</Text>
+              </Box>,
+              <Box key={`info/${key}`} marginLeft={2}>
+                <Text dimColor wrap="truncate-end">{repo.branch}</Text>
+                <Text dimColor> · </Text>
+                {syncLabel(repo)}
+                <Text dimColor> · </Text>
+                <Text color={repo.changes.length > 0 ? 'warning' : undefined} dimColor={repo.changes.length === 0}>{repo.changes.length} changed</Text>
               </Box>,
               ...(isClosed ? [] : treeRows(buildTree(repo.changes, key), 1, repo, origin)),
             ]
