@@ -40,6 +40,9 @@ export const statusColor = (code: string) =>
           ? 'permission'
           : 'warning'
 
+// The letter drawn for a status code: untracked is `U` and a conflict `!`, as in VS Code.
+export const statusLabel = (code: string) => (code === '??' ? 'U' : code.includes('U') ? '!' : code.trim() || 'M')
+
 // `added` and `removed` tint the changed words of an edited line, a step stronger than the row.
 // Moved lines are drawn orange where they left and blue where they arrived: the marker
 // is a theme key, the row a tint picked for the theme (no theme key is a dim orange or blue).

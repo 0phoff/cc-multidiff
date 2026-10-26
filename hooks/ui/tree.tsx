@@ -1,4 +1,4 @@
-import { colors, statusColor } from '../colors'
+import { colors, statusColor, statusLabel } from '../colors'
 import { openFile, ROOT } from '../state'
 import { toBold } from '../util'
 import type { Change, RepoInfo } from '../../types'
@@ -56,7 +56,7 @@ function treeRows($: any, ctx: Ctx, node: TreeNode, depth: number, repo: RepoInf
       return (
         <Box key={`file/${repo.dir}/${c.path}`} alignSelf="flex-start" marginLeft={depth * 2} backgroundColor={selected ? colors.selected : undefined}>
           {/* Outside the Button: a Button label ignores the Text colors inside it. */}
-          <Text bold color={statusColor(c.code)}>{(c.code.trim() || 'M').padEnd(2)}</Text>
+          <Text bold color={statusColor(c.code)}>{statusLabel(c.code).padEnd(2)}</Text>
           <Button key={`open/${repo.dir}/${c.path}`} plain onPress={() => openFile($, repo, c, origin)}>
             {c.path.split('/').pop() ?? c.path}
           </Button>
