@@ -102,7 +102,7 @@ const paneRender = async ($: any, e: any) => {
     <Box flexDirection="column">
       {toolbar($, ctx, { isFocusing, err, cfg, isPinned, menuIsOpen, contextPath })}
 
-      {(isRoot || !isFocusing) && snap.roots.length > 0 && section($, ctx, { id: ROOT, title: 'Repos', summary: `${rootTotal} changed` })}
+      {(isRoot || !isFocusing) && snap.roots.length > 0 && section($, ctx, { id: ROOT, title: 'Repositories', summary: `${rootTotal} changed` })}
       {(isRoot || !isFocusing) && (isRoot ? [focusBody($, ctx, ROOT, snap.roots, only)] : snap.roots.map((r, i) => repoRow($, ctx, ROOT, r, i === 0, snap.roots)))}
 
       {snap.roots.length === 0 && snap.worktrees.length === 0 && (
@@ -114,7 +114,7 @@ const paneRender = async ($: any, e: any) => {
         const total = wt.repos.reduce((n, r) => n + r.changes.length, 0)
         return (
           <Box key={`wt-${wt.name}`} flexDirection="column">
-            {section($, ctx, { id: wt.name, title: wt.name, summary: `${total} changed`, top: isFocusing ? 1 : 2 })}
+            {section($, ctx, { id: wt.name, title: `Worktree: ${wt.name}`, summary: `${total} changed`, top: isFocusing ? 1 : 2 })}
             {isFocusing ? focusBody($, ctx, wt.name, wt.repos, only) : wt.repos.map((repo, i) => repoRow($, ctx, wt.name, repo, i === 0, wt.repos))}
           </Box>
         )
