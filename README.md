@@ -30,7 +30,7 @@ Run `/multidiff` to open the pane, and again to close it.
 | `✕` | Kill: reset all state and close the pane |
 | `ⓥ` / `ⓩ` | Open the folder in VS Code / Zed (needs `code` / `zed` on the PATH) |
 | selector | What to diff against: local changes, the default branch, or a branch of your choice |
-| `⋮` | Pin the button above the prompt for this folder, toggle word highlighting, toggle moved line colors |
+| `⋮` | Pin the button above the prompt for this folder, toggle word highlighting, toggle moved line colors, toggle listing repos without changes in the tree |
 
 The selector, pins and toggles are remembered across sessions.
 

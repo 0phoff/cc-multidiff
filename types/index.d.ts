@@ -19,6 +19,7 @@ declare module 'claude-code' {
       menuOpen: boolean
       pinTick: number
       wordTick: number
+      cleanTick: number
       movedTick: number
       settingsTick: number
       expanded: Record<string, { up: number; down: number }>

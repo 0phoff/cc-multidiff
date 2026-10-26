@@ -2,7 +2,7 @@ import { update } from 'claude-code'
 
 import { colors } from '../colors'
 import { openIn, VSCODE, ZED } from '../editor'
-import { EDIT_BRANCH, killPlugin, MODE_LABELS, MODES, pickMode, refresh, toggleMovedColors, togglePin, toggleWordDiff } from '../state'
+import { EDIT_BRANCH, killPlugin, MODE_LABELS, MODES, pickMode, refresh, toggleMovedColors, togglePin, toggleShowClean, toggleWordDiff } from '../state'
 import type { Settings } from '../../types'
 import type { Ctx } from './ctx'
 
@@ -25,7 +25,7 @@ type ToolbarProps = {
 
 // The row of buttons on top, the diff selector and the three dot menu with its panel of toggles.
 export function toolbar($: any, ctx: Ctx, { isFocusing, err, cfg, isPinned, menuIsOpen, contextPath }: ToolbarProps) {
-  const { Box, Text, Button, Select, words, showMoved } = ctx
+  const { Box, Text, Button, Select, words, showMoved, showClean } = ctx
   return [
     <Box key="toolbar" width="100%">
       {isFocusing && (
@@ -70,6 +70,9 @@ export function toolbar($: any, ctx: Ctx, { isFocusing, err, cfg, isPinned, menu
           </Button>
           <Button key="menu-words" plain onPress={() => toggleWordDiff($)}>
             {`${words ? '☑' : '☐'} Highlight changed words`}
+          </Button>
+          <Button key="menu-clean" plain onPress={() => toggleShowClean($)}>
+            {`${showClean ? '☑' : '☐'} Show repositories without changes in tree`}
           </Button>
           <Button key="menu-moved" plain onPress={() => toggleMovedColors($)}>
             {`${showMoved ? '☑' : '☐'} Show moved lines in a different color`}

@@ -12,6 +12,7 @@ export type Ctx = {
   Select: any
   tints: Tints
   words: boolean
+  showClean: boolean
   showMoved: boolean
   file: FileView | null
   closed: string[]

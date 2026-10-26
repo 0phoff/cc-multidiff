@@ -70,14 +70,15 @@ function treeRows($: any, ctx: Ctx, node: TreeNode, depth: number, repo: RepoInf
 
 // A focused section: its repos with their changed files as a tree, the open file's diff beside it.
 export function focusBody($: any, ctx: Ctx, id: string, all: RepoInfo[], only: string | null = null) {
-  const { Box, Text, Button, closed, file, toggle } = ctx
-  // Every repo of the section is drawn, changed or not; narrowed to one, only that repo.
+  const { Box, Text, Button, closed, file, showClean, toggle } = ctx
+  // Narrowed to one repo, only that one, changed or not; else every repo, or only the changed ones.
   const narrowed = all.find(r => r.name === only)
-  const repos = narrowed ? [narrowed] : all
+  const repos = narrowed ? [narrowed] : showClean ? all : all.filter(r => r.changes.length > 0)
   const origin = id === ROOT ? 'Repos' : id
   return (
     <Box key={`body-${id}`} width="100%" marginTop={1}>
       <Box width={36} flexShrink={0} flexDirection="column" paddingRight={1}>
+        {repos.length === 0 && <Text dimColor>no changes</Text>}
         {repos.flatMap((repo, index) => {
           const key = `${id}/${repo.name}`
           const isClosed = closed.includes(key)

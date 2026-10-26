@@ -17,6 +17,7 @@ const pinTick = { plugin: 'multi-diff', key: 'pinTick' } as const
 const settingsTick = { plugin: 'multi-diff', key: 'settingsTick' } as const
 const snapshot = { plugin: 'multi-diff', key: 'snapshot' } as const
 const view = { plugin: 'multi-diff', key: 'view' } as const
+const cleanTick = { plugin: 'multi-diff', key: 'cleanTick' } as const
 const wordTick = { plugin: 'multi-diff', key: 'wordTick' } as const
 
 // The plugin's state: the atoms the pane draws from, the settings kept across sessions, and
@@ -141,20 +142,30 @@ export async function togglePin($: any) {
   await update($, pinTick, n => n + 1)
 }
 
-// Whether edited lines get their changed words highlighted, kept across sessions: on by default.
+// Whether edited lines get their changed words highlighted, kept across sessions: off by default.
 export const WORD_DIFF = 'wordDiff'
 export async function getWordDiff($: any): Promise<boolean> {
-  return (await $.store.get(WORD_DIFF)) !== false
+  return (await $.store.get(WORD_DIFF)) === true
 }
 export async function toggleWordDiff($: any) {
   await $.store.set(WORD_DIFF, !(await getWordDiff($)))
   await update($, wordTick, n => n + 1)
 }
 
-// Whether moved lines get their own colours, kept across sessions: on by default.
+// Whether the tree also lists the repos without changes, kept across sessions: off by default.
+export const SHOW_CLEAN = 'showClean'
+export async function getShowClean($: any): Promise<boolean> {
+  return (await $.store.get(SHOW_CLEAN)) === true
+}
+export async function toggleShowClean($: any) {
+  await $.store.set(SHOW_CLEAN, !(await getShowClean($)))
+  await update($, cleanTick, n => n + 1)
+}
+
+// Whether moved lines get their own colours, kept across sessions: off by default.
 export const MOVED_COLORS_KEY = 'movedColors'
 export async function getMovedColors($: any): Promise<boolean> {
-  return (await $.store.get(MOVED_COLORS_KEY)) !== false
+  return (await $.store.get(MOVED_COLORS_KEY)) === true
 }
 export async function toggleMovedColors($: any) {
   await $.store.set(MOVED_COLORS_KEY, !(await getMovedColors($)))
@@ -190,6 +201,7 @@ export async function killPlugin($: any) {
   await update($, expanded, () => ({}))
   await update($, pinTick, () => 0)
   await update($, wordTick, () => 0)
+  await update($, cleanTick, () => 0)
   await update($, movedTick, () => 0)
   await update($, menuOpen, () => false)
   await update($, settingsTick, () => 0)

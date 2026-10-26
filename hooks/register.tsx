@@ -7,6 +7,7 @@ import {
   getMovedColors,
   getPins,
   getSettings,
+  getShowClean,
   getWordDiff,
   killPlugin,
   PANE,
@@ -36,6 +37,8 @@ const menuOpen = atom({ plugin: 'multi-diff', key: 'menuOpen' } as const, false)
 const pinTick = atom({ plugin: 'multi-diff', key: 'pinTick' } as const, 0)
 // Same for the word highlighting.
 const wordTick = atom({ plugin: 'multi-diff', key: 'wordTick' } as const, 0)
+// Same for showing repos without changes in the tree.
+const cleanTick = atom({ plugin: 'multi-diff', key: 'cleanTick' } as const, 0)
 // Same for the moved line colours.
 const movedTick = atom({ plugin: 'multi-diff', key: 'movedTick' } as const, 0)
 // Same for the diff setting.
@@ -51,6 +54,7 @@ const paneRender = async ($: any, e: any) => {
   const { Box, Text, Button, Code, Select } = $.ui.resolve(e)
   await read($, pinTick)
   await read($, wordTick)
+  await read($, cleanTick)
   await read($, movedTick)
   await read($, settingsTick)
   const cfg = await getSettings($)
@@ -73,6 +77,7 @@ const paneRender = async ($: any, e: any) => {
     Select,
     tints: await tintsFor($),
     words: await getWordDiff($),
+    showClean: await getShowClean($),
     showMoved: await getMovedColors($),
     file,
     closed: await read($, collapsed),
