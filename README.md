@@ -1,7 +1,7 @@
 # MultiDiff
 A Claude Code plugin that shows the changes of a multi-repo project in a pane next to the chat.
 It lists every (nested) repository and allows to see local changes, changes against the default branch or against a chosen branch.
-It also has a dedicated feature to show worktrees, explained in the [usage section](###).
+It also has a dedicated feature to show worktrees, explained in the [usage section](#usage).
 
 <p>
 <img src="screenshots/overview.png" alt="overview" width="45%"/>
@@ -10,9 +10,10 @@ It also has a dedicated feature to show worktrees, explained in the [usage secti
 </p>
 
 ## Installing
-Run the following command in your claude code chat to install the plugin:
+Run the following commands in your claude code chat to add the marketplace and install the plugin:
 ```
-/plugin install multi-diff --marketplace 0phoff/cc-multidiff
+/plugin marketplace add 0phoff/cc-multidiff
+/plugin install multi-diff@multidiff
 ```
 
 ## Usage

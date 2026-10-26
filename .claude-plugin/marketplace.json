@@ -1,6 +1,6 @@
 {
-  "name": "local-mods",
-  "description": "Personal Claude Code mods",
+  "name": "multidiff",
+  "description": "Multidiff: a multi-repo diff pane for Claude Code",
   "owner": {
     "name": "0phoff"
   },
