@@ -15,8 +15,10 @@ declare module 'claude-code' {
       view: FileView | null
       collapsed: string[]
       error: string | null
+      menuOpen: boolean
       pinTick: number
       wordTick: number
+      movedTick: number
       settingsTick: number
       expanded: Record<string, { up: number; down: number }>
       pages: Record<string, number>

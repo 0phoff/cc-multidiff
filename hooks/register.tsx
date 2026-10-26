@@ -11,10 +11,14 @@ const view = atom({ plugin: 'multi-diff', key: 'view' } as const, null)
 const error = atom({ plugin: 'multi-diff', key: 'error' } as const, null)
 // The tree nodes (repo and folder keys) the person has folded.
 const collapsed = atom({ plugin: 'multi-diff', key: 'collapsed' } as const, [] as string[])
+// Whether the three dot menu of the toolbar is open.
+const menuOpen = atom({ plugin: 'multi-diff', key: 'menuOpen' } as const, false)
 // Bumped on every pin change, so the sites that read the pins draw again.
 const pinTick = atom({ plugin: 'multi-diff', key: 'pinTick' } as const, 0)
 // Same for the word highlighting.
 const wordTick = atom({ plugin: 'multi-diff', key: 'wordTick' } as const, 0)
+// Same for the moved line colours.
+const movedTick = atom({ plugin: 'multi-diff', key: 'movedTick' } as const, 0)
 // Same for the diff setting.
 const settingsTick = atom({ plugin: 'multi-diff', key: 'settingsTick' } as const, 0)
 // Lines of context added by the arrows between two hunks, by `<dir>/<path>@<first line of the hunk below>`.
@@ -342,7 +346,7 @@ const partsOf = (tokens: string[], changed: boolean[], other: string[], otherCha
 // one, so the surface can break the line there. Same length, so parts are cut from it after.
 const keepSpaces = (text: string) => text.replace(/^ +| {2,}/g, run => NBSP.repeat(run.length))
 
-const rowsOf = (hunk: Hunk, words: boolean): DiffRow[] => {
+const rowsOf = (hunk: Hunk, words: boolean, showMoved: boolean): DiffRow[] => {
   let o = hunk.oldStart
   let n = hunk.newStart
   const rows = hunk.lines.map((line, index) => {
@@ -351,7 +355,7 @@ const rowsOf = (hunk: Hunk, words: boolean): DiffRow[] => {
     const number = marker === '-' ? o : n
     if (marker !== '+') o++
     if (marker !== '-') n++
-    return { marker, number, raw, moved: hunk.moved[index], parts: [{ text: raw, changed: false }] as Part[] }
+    return { marker, number, raw, moved: showMoved && hunk.moved[index], parts: [{ text: raw, changed: false }] as Part[] }
   })
   // A run of removed lines right before a run of added ones: line i of one is the
   // edit of line i of the other, so the part that differs is marked.
@@ -425,11 +429,12 @@ const GIT_DIFF = [
   'diff',
 ]
 const MOVED_START = '\x1b[35m'
+// `added` and `removed` tint the changed words of an edited line, a step stronger than the row.
 // Moved lines are drawn orange where they left and blue where they arrived: the marker
 // is a theme key, the row a tint picked for the theme (no theme key is a dim orange or blue).
 const MOVED_TINTS = {
-  dark: { from: '#4a3315', to: '#1c3050' },
-  light: { from: '#ffe3c2', to: '#d4e4ff' },
+  dark: { from: '#4a3315', to: '#1c3050', added: '#2f5a37', removed: '#6a3239' },
+  light: { from: '#ffe3c2', to: '#d4e4ff', added: '#b8e5c2', removed: '#f4bfc4' },
 }
 // Any theme with `light` in its name (light, light-daltonized, light-ansi); `auto` counts as dark.
 const isLightTheme = async ($: any): Promise<boolean> => {
@@ -601,6 +606,14 @@ const toggleWordDiff = async ($: any) => {
   await update($, wordTick, n => n + 1)
 }
 
+// Whether moved lines get their own colours, kept across sessions: on by default.
+const MOVED_COLORS_KEY = 'movedColors'
+const getMovedColors = async ($: any): Promise<boolean> => (await $.store.get(MOVED_COLORS_KEY)) !== false
+const toggleMovedColors = async ($: any) => {
+  await $.store.set(MOVED_COLORS_KEY, !(await getMovedColors($)))
+  await update($, movedTick, n => n + 1)
+}
+
 // Opens the pane, or closes it when it is up; the slash command and the button share it.
 const togglePane = async ($: any): Promise<boolean> => {
   const isUp = (await $.ui.panes()).some((p: { id: string }) => p.id === PANE)
@@ -629,6 +642,8 @@ const killPlugin = async ($: any) => {
   await update($, expanded, () => ({}))
   await update($, pinTick, () => 0)
   await update($, wordTick, () => 0)
+  await update($, movedTick, () => 0)
+  await update($, menuOpen, () => false)
   await update($, settingsTick, () => 0)
   $.ui.toast('multidiff killed: run /multidiff to start fresh')
 }
@@ -638,21 +653,14 @@ const paneRender = async ($: any, e: any) => {
   const { Box, Text, Button, Code, Select } = $.ui.resolve(e)
   await read($, pinTick)
   await read($, wordTick)
+  await read($, movedTick)
   await read($, settingsTick)
   const cfg = await getSettings($)
   const tints = MOVED_TINTS[(await isLightTheme($)) ? 'light' : 'dark']
   const isPinned = (await getPins($)).includes(await $.session.root())
-  const pinButton = (
-    <Button key="pin" plain onPress={() => togglePin($)}>
-      <Text bold color="suggestion">{isPinned ? '⚑ ' : '⚐ '}</Text>
-    </Button>
-  )
   const words = await getWordDiff($)
-  const wordButton = (
-    <Button key="words" plain onPress={() => toggleWordDiff($)}>
-      <Text bold color="suggestion">{words ? '✦ ' : '✧ '}</Text>
-    </Button>
-  )
+  const showMoved = await getMovedColors($)
+  const menuIsOpen = await read($, menuOpen)
   const snap = await read($, snapshot)
   const focused = await read($, focus)
   const file = await read($, view)
@@ -679,13 +687,13 @@ const paneRender = async ($: any, e: any) => {
         </Box>
         <Box flexGrow={1} flexShrink={1} minWidth={0}>
           <Text wrap="wrap">
-            {/* Only a changed word gets a Text of its own: a nested Text per row (and per unchanged
+            {/* Only a changed word gets a (bold) Text of its own: a nested Text per row (and per unchanged
                 stretch) makes the surface stall once a file has a hundred or so rows. */}
             {!r.parts.some(part => part.changed)
               ? r.parts.map(part => part.text).join('') || NBSP
               : r.parts.map((part, k) =>
                   part.changed ? (
-                    <Text key={`part-${k}`} backgroundColor={r.marker === '+' ? 'diffAddedWord' : 'diffRemovedWord'}>
+                    <Text key={`part-${k}`} bold backgroundColor={r.marker === '+' ? tints.added : tints.removed}>
                       {part.text}
                     </Text>
                   ) : (
@@ -721,7 +729,7 @@ const paneRender = async ($: any, e: any) => {
         skipped += hunk.lines.length
         return
       }
-      rowsOf(hunk, words).forEach((r, j) => draw(r, `row-${i}-${j}`))
+      rowsOf(hunk, words, showMoved).forEach((r, j) => draw(r, `row-${i}-${j}`))
       const next = hunks[i + 1]
       if (!next) return
       const above = newRange(hunk).last
@@ -965,8 +973,6 @@ const paneRender = async ($: any, e: any) => {
         <Button key="kill" plain onPress={() => killPlugin($)}>
           <Text bold color="error">✕ </Text>
         </Button>
-        {pinButton}
-        {wordButton}
         <Button key="code" plain onPress={() => openIn($, VSCODE, contextPath)}>
           <Text bold color="suggestion">ⓥ </Text>
         </Button>
@@ -986,7 +992,25 @@ const paneRender = async ($: any, e: any) => {
           ]}
           onSelect={v => pickMode($, cfg, v === EDIT_BRANCH ? 'branch' : (v as Settings['mode']))}
         />
+        <Button key="menu" plain onPress={() => update($, menuOpen, open => !open)}>
+          <Text bold color="suggestion">⋮</Text>
+        </Button>
       </Box>
+      {menuIsOpen && (
+        <Box width="100%" justifyContent="flex-end" marginTop={1}>
+          <Box flexDirection="column" borderStyle="round" borderColor="promptBorder" paddingX={1}>
+            <Button key="menu-pin" plain onPress={() => togglePin($)}>
+              {`${isPinned ? '☑' : '☐'} Pin plugin for this folder`}
+            </Button>
+            <Button key="menu-words" plain onPress={() => toggleWordDiff($)}>
+              {`${words ? '☑' : '☐'} Show changed words in bold`}
+            </Button>
+            <Button key="menu-moved" plain onPress={() => toggleMovedColors($)}>
+              {`${showMoved ? '☑' : '☐'} Show moved lines in a different color`}
+            </Button>
+          </Box>
+        </Box>
+      )}
 
       {(isRoot || !isFocusing) && snap.roots.length > 0 &&
         section({
