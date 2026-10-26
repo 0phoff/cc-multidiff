@@ -68,20 +68,17 @@ function treeRows($: any, ctx: Ctx, node: TreeNode, depth: number, repo: RepoInf
   ]
 }
 
-// A focused section: the changed files of its repos as a tree, the open file's diff beside it.
+// A focused section: its repos with their changed files as a tree, the open file's diff beside it.
 export function focusBody($: any, ctx: Ctx, id: string, all: RepoInfo[], only: string | null = null) {
   const { Box, Text, Button, closed, file, toggle } = ctx
-  // Narrowed to one repo: it is drawn even without changes, and the rest are not counted.
+  // Every repo of the section is drawn, changed or not; narrowed to one, only that repo.
   const narrowed = all.find(r => r.name === only)
   const repos = narrowed ? [narrowed] : all
-  const changed = narrowed ? repos : repos.filter(r => r.changes.length > 0)
-  const clean = narrowed ? 0 : repos.length - changed.length
   const origin = id === ROOT ? 'Repos' : id
   return (
     <Box key={`body-${id}`} width="100%" marginTop={1}>
       <Box width={36} flexShrink={0} flexDirection="column" paddingRight={1}>
-        {(changed.length === 0 || (narrowed && narrowed.changes.length === 0)) && <Text dimColor>no changes</Text>}
-        {changed.flatMap((repo, index) => {
+        {repos.flatMap((repo, index) => {
           const key = `${id}/${repo.name}`
           const isClosed = closed.includes(key)
           return [
@@ -100,11 +97,6 @@ export function focusBody($: any, ctx: Ctx, id: string, all: RepoInfo[], only: s
             ...(isClosed ? [] : treeRows($, ctx, buildTree(repo.changes, key), 1, repo, origin)),
           ]
         })}
-        {clean > 0 && changed.length > 0 && (
-          <Box marginTop={1}>
-            <Text dimColor>{clean} without changes</Text>
-          </Box>
-        )}
       </Box>
       <Box flexGrow={1} flexShrink={1} minWidth={0} flexDirection="column" paddingLeft={1}>
         {file ? diffPanel($, ctx, file) : <Text dimColor>Select a file to see its diff.</Text>}
