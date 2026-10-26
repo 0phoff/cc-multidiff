@@ -3,6 +3,12 @@ A Claude Code plugin that shows the changes of a multi-repo project in a pane ne
 It lists every (nested) repository and allows to see local changes, changes against the default branch or against a chosen branch.
 It also has a dedicated feature to show worktrees, explained in the [usage section](###).
 
+<p>
+<img src="screenshots/overview.png" alt="overview" width="50%"/>
+<img src="screenshots/diff.png" alt="diff" width="23%"/>
+<img src="screenshots/worktree.png" alt="worktree" width="23%"/>
+</p>
+
 ## Installing
 Run the following command in your claude code chat to install the plugin:
 ```
