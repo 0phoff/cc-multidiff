@@ -145,13 +145,18 @@ export const register: Register = on => {
   // The button above the prompt, shown in the folders the pane was pinned for.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     await read($, pinTick)
-    if (e.props.hasSurvey || !(await getPins($)).includes(await $.session.root())) return next(e)
+    // The band draws one tree: take what the other plugins drew and put the button beside it.
+    const below = await next(e)
+    if (e.props.hasSurvey || !(await getPins($)).includes(await $.session.root())) return below
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
-      <Box>
-        <Button key="multidiff" plain onPress={() => togglePane($)}>
-          <Text bold color={colors.accent}>⎇ multidiff</Text>
-        </Button>
+      <Box flexDirection="row">
+        {below}
+        <Box flexShrink={0} marginLeft={below ? 2 : 0}>
+          <Button key="multidiff" plain onPress={() => togglePane($)}>
+            <Text bold color={colors.accent}>⎇ multidiff</Text>
+          </Button>
+        </Box>
       </Box>
     )
   })
