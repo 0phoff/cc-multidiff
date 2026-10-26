@@ -1014,7 +1014,7 @@ const paneRender = async ($: any, e: any) => {
               {`${isPinned ? '☑' : '☐'} Pin plugin for this folder`}
             </Button>
             <Button key="menu-words" plain onPress={() => toggleWordDiff($)}>
-              {`${words ? '☑' : '☐'} Show changed words in bold`}
+              {`${words ? '☑' : '☐'} Highlight changed words`}
             </Button>
             <Button key="menu-moved" plain onPress={() => toggleMovedColors($)}>
               {`${showMoved ? '☑' : '☐'} Show moved lines in a different color`}
