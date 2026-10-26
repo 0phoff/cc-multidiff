@@ -1,12 +1,12 @@
 {
-  "name": "multidiff",
+  "name": "cc-multidiff",
   "description": "Multidiff: a multi-repo diff pane for Claude Code",
   "owner": {
     "name": "0phoff"
   },
   "plugins": [
     {
-      "name": "multi-diff",
+      "name": "multidiff",
       "source": "./",
       "description": "Multi-repo diff pane: root repo status, per-worktree changed files and expandable diffs",
       "author": {

@@ -21,7 +21,7 @@ So UI functions that need `$` (`section`, `repoRow`, `toolbar`, `focusBody`) tak
 
 ## State atoms
 
-- Each file that reads or writes a value spells its own `{ plugin: 'multi-diff', key: '...' } as const` literal.
+- Each file that reads or writes a value spells its own `{ plugin: 'multidiff', key: '...' } as const` literal.
 - The atom is defined once, with its starting value, in `register.tsx`.
 - A new value also needs its type in `types/index.d.ts` and a reset in `killPlugin` (`state.ts`).
 - Render code only reads; writes go in handlers.

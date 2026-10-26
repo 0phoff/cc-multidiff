@@ -13,7 +13,7 @@ It also has a dedicated feature to show worktrees, explained in the [usage secti
 Run the following commands in your claude code chat to add the marketplace and install the plugin:
 ```
 /plugin marketplace add 0phoff/cc-multidiff
-/plugin install multi-diff@multidiff
+/plugin install multidiff@cc-multidiff
 ```
 
 ## Usage

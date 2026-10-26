@@ -8,9 +8,9 @@ import type { Ctx } from './ctx'
 
 // References to the plugin's state atoms, which are defined in register.tsx. The plugin loader reads
 // the plugin and key off a literal in the file that reads or writes the atom, so each file spells its own.
-const focus = { plugin: 'multi-diff', key: 'focus' } as const
-const focusRepo = { plugin: 'multi-diff', key: 'focusRepo' } as const
-const view = { plugin: 'multi-diff', key: 'view' } as const
+const focus = { plugin: 'multidiff', key: 'focus' } as const
+const focusRepo = { plugin: 'multidiff', key: 'focusRepo' } as const
+const view = { plugin: 'multidiff', key: 'view' } as const
 
 // The ahead/behind of a repo against the compared ref, as drawn in the overview and under a repo in the tree.
 export const syncLabel = ({ Text }: Ctx, repo: RepoInfo) =>

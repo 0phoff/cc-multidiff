@@ -8,10 +8,10 @@ import type { Ctx } from './ctx'
 
 // References to the plugin's state atoms, which are defined in register.tsx. The plugin loader reads
 // the plugin and key off a literal in the file that reads or writes the atom, so each file spells its own.
-const focusRepo = { plugin: 'multi-diff', key: 'focusRepo' } as const
-const focus = { plugin: 'multi-diff', key: 'focus' } as const
-const menuOpen = { plugin: 'multi-diff', key: 'menuOpen' } as const
-const view = { plugin: 'multi-diff', key: 'view' } as const
+const focusRepo = { plugin: 'multidiff', key: 'focusRepo' } as const
+const focus = { plugin: 'multidiff', key: 'focus' } as const
+const menuOpen = { plugin: 'multidiff', key: 'menuOpen' } as const
+const view = { plugin: 'multidiff', key: 'view' } as const
 
 type ToolbarProps = {
   isFocusing: boolean

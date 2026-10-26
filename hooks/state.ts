@@ -5,27 +5,27 @@ import type { Change, FileView, RepoInfo, Settings } from '../types'
 
 // References to the plugin's state atoms, which are defined in register.tsx. The plugin loader reads
 // the plugin and key off a literal in the file that reads or writes the atom, so each file spells its own.
-const collapsed = { plugin: 'multi-diff', key: 'collapsed' } as const
-const error = { plugin: 'multi-diff', key: 'error' } as const
-const expanded = { plugin: 'multi-diff', key: 'expanded' } as const
-const focusRepo = { plugin: 'multi-diff', key: 'focusRepo' } as const
-const focus = { plugin: 'multi-diff', key: 'focus' } as const
-const menuOpen = { plugin: 'multi-diff', key: 'menuOpen' } as const
-const movedTick = { plugin: 'multi-diff', key: 'movedTick' } as const
-const pages = { plugin: 'multi-diff', key: 'pages' } as const
-const pinTick = { plugin: 'multi-diff', key: 'pinTick' } as const
-const settingsTick = { plugin: 'multi-diff', key: 'settingsTick' } as const
-const snapshot = { plugin: 'multi-diff', key: 'snapshot' } as const
-const view = { plugin: 'multi-diff', key: 'view' } as const
-const cleanTick = { plugin: 'multi-diff', key: 'cleanTick' } as const
-const wordTick = { plugin: 'multi-diff', key: 'wordTick' } as const
+const collapsed = { plugin: 'multidiff', key: 'collapsed' } as const
+const error = { plugin: 'multidiff', key: 'error' } as const
+const expanded = { plugin: 'multidiff', key: 'expanded' } as const
+const focusRepo = { plugin: 'multidiff', key: 'focusRepo' } as const
+const focus = { plugin: 'multidiff', key: 'focus' } as const
+const menuOpen = { plugin: 'multidiff', key: 'menuOpen' } as const
+const movedTick = { plugin: 'multidiff', key: 'movedTick' } as const
+const pages = { plugin: 'multidiff', key: 'pages' } as const
+const pinTick = { plugin: 'multidiff', key: 'pinTick' } as const
+const settingsTick = { plugin: 'multidiff', key: 'settingsTick' } as const
+const snapshot = { plugin: 'multidiff', key: 'snapshot' } as const
+const view = { plugin: 'multidiff', key: 'view' } as const
+const cleanTick = { plugin: 'multidiff', key: 'cleanTick' } as const
+const wordTick = { plugin: 'multidiff', key: 'wordTick' } as const
 
 // The plugin's state: the atoms the pane draws from, the settings kept across sessions, and
 // the actions that change them (refresh, open a file, toggles, open or kill the pane).
 
 export type ExpandedMap = Record<string, { up: number; down: number }>
 
-export const PANE = 'multi-diff'
+export const PANE = 'multidiff'
 export const ROOT = '__root__'
 // The tree nodes (repo and folder keys) the person has folded.
 // Whether the three dot menu of the toolbar is open.

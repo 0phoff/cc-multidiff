@@ -23,30 +23,30 @@ import { toolbar } from './ui/toolbar.tsx'
 import type { WorktreeInfo } from '../types'
 
 // The state atoms, with their starting values. The other modules spell the reference of the ones they use.
-const snapshot = atom({ plugin: 'multi-diff', key: 'snapshot' } as const, null)
-const focus = atom({ plugin: 'multi-diff', key: 'focus' } as const, null)
+const snapshot = atom({ plugin: 'multidiff', key: 'snapshot' } as const, null)
+const focus = atom({ plugin: 'multidiff', key: 'focus' } as const, null)
 // The repo the focused section is narrowed to (its name), or null for all of the section's repos.
-const focusRepo = atom({ plugin: 'multi-diff', key: 'focusRepo' } as const, null)
-const view = atom({ plugin: 'multi-diff', key: 'view' } as const, null)
-const error = atom({ plugin: 'multi-diff', key: 'error' } as const, null)
+const focusRepo = atom({ plugin: 'multidiff', key: 'focusRepo' } as const, null)
+const view = atom({ plugin: 'multidiff', key: 'view' } as const, null)
+const error = atom({ plugin: 'multidiff', key: 'error' } as const, null)
 // The tree nodes (repo and folder keys) the person has folded.
-const collapsed = atom({ plugin: 'multi-diff', key: 'collapsed' } as const, [] as string[])
+const collapsed = atom({ plugin: 'multidiff', key: 'collapsed' } as const, [] as string[])
 // Whether the three dot menu of the toolbar is open.
-const menuOpen = atom({ plugin: 'multi-diff', key: 'menuOpen' } as const, false)
+const menuOpen = atom({ plugin: 'multidiff', key: 'menuOpen' } as const, false)
 // Bumped on every pin change, so the sites that read the pins draw again.
-const pinTick = atom({ plugin: 'multi-diff', key: 'pinTick' } as const, 0)
+const pinTick = atom({ plugin: 'multidiff', key: 'pinTick' } as const, 0)
 // Same for the word highlighting.
-const wordTick = atom({ plugin: 'multi-diff', key: 'wordTick' } as const, 0)
+const wordTick = atom({ plugin: 'multidiff', key: 'wordTick' } as const, 0)
 // Same for showing repos without changes in the tree.
-const cleanTick = atom({ plugin: 'multi-diff', key: 'cleanTick' } as const, 0)
+const cleanTick = atom({ plugin: 'multidiff', key: 'cleanTick' } as const, 0)
 // Same for the moved line colours.
-const movedTick = atom({ plugin: 'multi-diff', key: 'movedTick' } as const, 0)
+const movedTick = atom({ plugin: 'multidiff', key: 'movedTick' } as const, 0)
 // Same for the diff setting.
-const settingsTick = atom({ plugin: 'multi-diff', key: 'settingsTick' } as const, 0)
+const settingsTick = atom({ plugin: 'multidiff', key: 'settingsTick' } as const, 0)
 // How many more pages of rows the open file shows beyond the first, by `<dir>/<path>`.
-const pages = atom({ plugin: 'multi-diff', key: 'pages' } as const, {} as Record<string, number>)
+const pages = atom({ plugin: 'multidiff', key: 'pages' } as const, {} as Record<string, number>)
 // Lines of context added by the arrows between two hunks, by `<dir>/<path>@<first line of the hunk below>`.
-const expanded = atom({ plugin: 'multi-diff', key: 'expanded' } as const, {} as ExpandedMap)
+const expanded = atom({ plugin: 'multidiff', key: 'expanded' } as const, {} as ExpandedMap)
 
 // The Multidiff pane's drawing: reads what it draws from, then lays out the toolbar and the
 // overview, or the tree and the diff of a focused section.
@@ -149,7 +149,7 @@ export const register: Register = on => {
     const { Box, Button, Text } = $.ui.resolve(e)
     return (
       <Box>
-        <Button key="multi-diff" plain onPress={() => togglePane($)}>
+        <Button key="multidiff" plain onPress={() => togglePane($)}>
           <Text bold color={colors.accent}>⎇ multidiff</Text>
         </Button>
       </Box>

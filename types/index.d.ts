@@ -9,7 +9,7 @@ export type FileView = { origin: string; repo: string; dir: string; path: string
 
 declare module 'claude-code' {
   interface PluginState {
-    'multi-diff': {
+    'multidiff': {
       snapshot: Snapshot | null
       focus: string | null
       focusRepo: string | null

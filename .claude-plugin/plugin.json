@@ -1,5 +1,5 @@
 {
-  "name": "multi-diff",
+  "name": "multidiff",
   "version": "0.3.2",
   "description": "Multidiff: a pane for multi-repo projects. Shows the status of every root repo and, per worktree, the changed files with expandable diffs, ahead/behind counts, and shortcuts to open VS Code or Zed.",
   "types": "./types/index.d.ts",

@@ -10,8 +10,8 @@ import type { Ctx } from './ctx'
 
 // References to the plugin's state atoms, which are defined in register.tsx. The plugin loader reads
 // the plugin and key off a literal in the file that reads or writes the atom, so each file spells its own.
-const expanded = { plugin: 'multi-diff', key: 'expanded' } as const
-const pages = { plugin: 'multi-diff', key: 'pages' } as const
+const expanded = { plugin: 'multidiff', key: 'expanded' } as const
+const pages = { plugin: 'multidiff', key: 'pages' } as const
 
 // What an arrow adds, and the most that "..." is shown for instead of the arrows.
 const EXPAND = 10
