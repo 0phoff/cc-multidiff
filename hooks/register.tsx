@@ -854,12 +854,14 @@ const paneRender = async ($: any, e: any) => {
   // Columns: the name takes the room left and is cut at the end (never wraps); the branch and
   // the stats are as wide as their longest entry in the same section (the branch capped), so
   // the rows of a section line up and short branches do not pay for a long one elsewhere.
-  const statsOf = (r: RepoInfo) => `${r.missing ? 'branch does not exist' : r.ref ? `↑${r.ahead} ↓${r.behind}` : 'no upstream'} · ${r.changes.length} changed`
+  const syncOf = (r: RepoInfo) => (r.missing ? 'branch does not exist' : r.ref ? `↑${r.ahead} ↓${r.behind}` : 'no upstream')
+  const changedOf = (r: RepoInfo) => `${r.changes.length} changed`
 
   const repoRow = (id: string, repo: RepoInfo, first: boolean, group: RepoInfo[]) => {
     const n = repo.changes.length
     const branchWidth = Math.min(24, Math.max(0, ...group.map(r => r.branch.length))) + 2
-    const statsWidth = Math.max(0, ...group.map(r => statsOf(r).length)) + 1
+    const syncWidth = Math.max(0, ...group.map(r => syncOf(r).length)) + 2
+    const changedWidth = Math.max(0, ...group.map(r => changedOf(r).length)) + 1
     return (
       <Box key={`${id}/${repo.name}`} flexDirection="column" marginTop={first ? 1 : 0}>
         <Box paddingX={1} width="100%">
@@ -869,21 +871,20 @@ const paneRender = async ($: any, e: any) => {
           <Box width={branchWidth} flexShrink={0} justifyContent="flex-end" paddingRight={2}>
             <Text dimColor wrap="truncate-end">{repo.branch}</Text>
           </Box>
-          <Box width={statsWidth} flexShrink={0}>
-            <Text>
-              {repo.missing ? (
-                <Text color="error">branch does not exist</Text>
-              ) : repo.ref ? (
-                <Text>
-                  <Text color={repo.ahead > 0 ? 'success' : undefined} dimColor={repo.ahead === 0}>↑{repo.ahead} </Text>
-                  <Text color={repo.behind > 0 ? 'warning' : undefined} dimColor={repo.behind === 0}>↓{repo.behind}</Text>
-                </Text>
-              ) : (
-                <Text dimColor>no upstream</Text>
-              )}
-              <Text dimColor> · </Text>
-              <Text color={n > 0 ? 'warning' : undefined} dimColor={n === 0}>{n} changed</Text>
-            </Text>
+          <Box width={syncWidth} flexShrink={0} justifyContent="center">
+            {repo.missing ? (
+              <Text color="error">branch does not exist</Text>
+            ) : repo.ref ? (
+              <Text>
+                <Text color={repo.ahead > 0 ? 'success' : undefined} dimColor={repo.ahead === 0}>↑{repo.ahead} </Text>
+                <Text color={repo.behind > 0 ? 'warning' : undefined} dimColor={repo.behind === 0}>↓{repo.behind}</Text>
+              </Text>
+            ) : (
+              <Text dimColor>no upstream</Text>
+            )}
+          </Box>
+          <Box width={changedWidth} flexShrink={0} justifyContent="flex-end">
+            <Text color={n > 0 ? 'warning' : undefined} dimColor={n === 0}>{changedOf(repo)}</Text>
           </Box>
         </Box>
       </Box>
