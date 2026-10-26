@@ -4,9 +4,9 @@ It lists every (nested) repository and allows to see local changes, changes agai
 It also has a dedicated feature to show worktrees, explained in the [usage section](###).
 
 <p>
-<img src="screenshots/overview.png" alt="overview" width="50%"/>
-<img src="screenshots/diff.png" alt="diff" width="23%"/>
-<img src="screenshots/worktree.png" alt="worktree" width="23%"/>
+<img src="screenshots/overview.png" alt="overview" width="45%"/>
+<img src="screenshots/diff.png" alt="diff" width="22%"/>
+<img src="screenshots/worktree.png" alt="worktree" width="22%"/>
 </p>
 
 ## Installing
